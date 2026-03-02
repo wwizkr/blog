@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BlogWriter 메뉴</title>
+  <link rel="stylesheet" href="/assets/mublo-editor/MubloEditor.css?v=20260301c" />
+  <link rel="stylesheet" href="/assets/web-shell/style.css?v=20260301c" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div id="sectionTitle" class="brand">키워드 관리</div>
+      <div class="right-tools">
+        <span id="collectAutoBadge" class="badge">수집 자동: -</span>
+        <span id="writerAutoBadge" class="badge">작성 자동: -</span>
+        <span id="publishAutoBadge" class="badge">발행 자동: -</span>
+        <span id="relatedLimitBadge" class="badge">현재 상한: -</span>
+        <button id="themeToggle" class="btn">Theme</button>
+      </div>
+    </header>
+
+    <div class="layout-shell">
+      <nav class="menu-nav sidebar-nav">
+        <div id="primaryMenu" class="menu-primary menu-accordion"></div>
+    </nav>
+
+    <main class="content">
+      <section id="dashboardSection" class="panel hidden">
+        <div class="panel-head"><h2>대시보드</h2><button id="dashboardRefreshBtn" class="btn">새로고침</button></div>
+        <div class="form-row tight dashboard-control-row">
+          <label><input id="dashboardAutoRefreshEnabled" type="checkbox"/> 자동 새로고침</label>
+          <label>주기(초)</label><input id="dashboardAutoRefreshSec" type="number" min="5" max="300" value="30"/>
+          <label>수집 실패 경고(%)</label><input id="dashboardWarnCollectFail" type="number" min="1" max="100" value="20"/>
+          <label>작성 미준비 경고(%)</label><input id="dashboardWarnWriterUnready" type="number" min="1" max="100" value="30"/>
+          <label>발행 실패 경고(%)</label><input id="dashboardWarnPublishFail" type="number" min="1" max="100" value="20"/>
+          <label>모니터 오류 경고(건)</label><input id="dashboardWarnMonitorErrors" type="number" min="1" max="999" value="5"/>
+        </div>
+        <p id="dashboardHint" class="hint">-</p>
+        <section class="dashboard-block">
+          <div class="dashboard-block-head">자동실행 상태</div>
+          <div id="dashboardAutoGrid" class="dashboard-auto-grid"></div>
+        </section>
+        <section class="dashboard-block">
+          <div class="dashboard-block-head">운영 지표</div>
+          <div id="dashboardOpsGrid" class="grid-cards"></div>
+        </section>
+        <section class="dashboard-block">
+          <div class="dashboard-block-head">자원 현황</div>
+          <div id="dashboardResourceGrid" class="grid-cards dashboard-resource-grid"></div>
+        </section>
+      </section>
+      <section id="keywordSection" class="split hidden">
+        <section class="panel category-panel">
+          <div class="panel-head"><h2>카테고리</h2></div>
+          <div class="form-row">
+            <input id="categoryInput" type="text" placeholder="카테고리 이름" />
+            <button id="categoryAddBtn" class="btn">추가</button>
+            <button id="categoryRenameBtn" class="btn ghost">이름 변경</button>
+            <button id="categoryDeleteBtn" class="btn danger">삭제</button>
+          </div>
+          <div class="form-row tight">
+            <label>정렬</label>
+            <select id="categorySort">
+              <option value="name_asc">이름 오름차순</option>
+              <option value="name_desc">이름 내림차순</option>
+              <option value="id_desc">최신 생성순</option>
+              <option value="id_asc">오래된 순</option>
+            </select>
+          </div>
+          <div class="table-wrap"><table id="categoryTable"><thead><tr><th>ID</th><th>카테고리</th></tr></thead><tbody></tbody></table></div>
+        </section>
+        <section class="panel keyword-panel">
+          <div class="panel-head"><h2>키워드</h2><button id="reloadBtn" class="btn">새로고침</button></div>
+          <div class="form-row">
+            <select id="keywordCategorySelect"></select>
+            <input id="keywordInput" type="text" placeholder="새 키워드 입력" />
+            <button id="keywordAddBtn" class="btn">추가</button>
+            <button id="keywordToggleBtn" class="btn ghost">활성/비활성</button>
+            <button id="keywordDeleteBtn" class="btn danger">삭제</button>
+          </div>
+          <div class="form-row tight">
+            <input id="keywordSearchInput" type="text" placeholder="키워드/카테고리 검색" />
+            <label>정렬</label>
+            <select id="keywordSort">
+              <option value="created_desc">최신 생성순</option>
+              <option value="keyword_asc">키워드 오름차순</option>
+              <option value="keyword_desc">키워드 내림차순</option>
+              <option value="collected_desc">수집횟수 높은순</option>
+              <option value="published_desc">발행횟수 높은순</option>
+              <option value="active_first">활성 우선</option>
+            </select>
+            <button id="keywordBulkToggleBtn" class="btn ghost">필터 결과 일괄 활성/비활성</button>
+          </div>
+          <div class="form-row tight">
+            <textarea id="keywordBulkInput" rows="2" placeholder="키워드 일괄 등록: 줄바꿈 또는 쉼표(,) 구분"></textarea>
+            <button id="keywordBulkAddBtn" class="btn">일괄 추가</button>
+          </div>
+          <div class="table-wrap"><table id="keywordTable"><thead><tr><th>ID</th><th>키워드</th><th>카테고리</th><th>활성</th><th>총 수집횟수</th><th>최종 수집일</th><th>총 발행횟수</th><th>최종 발행일</th></tr></thead><tbody></tbody></table></div>
+          <div id="keywordPager" class="pager-row"></div>
+          <div class="sub-panel">
+            <div class="sub-head"><h3>연관키워드</h3><div class="form-row tight"><label>원본 키워드</label><select id="sourceKeywordSelect"></select><button id="relatedReloadBtn" class="btn">조회</button></div></div>
+            <div class="table-wrap"><table id="relatedTable"><thead><tr><th>연결ID</th><th>연관 키워드</th><th>반영횟수</th><th>최종반영일</th></tr></thead><tbody></tbody></table></div>
+            <div class="form-row tight"><button id="relatedBlockBtn" class="btn danger">선택 연관키워드 삭제(차단)</button></div>
+            <div class="table-wrap"><table id="blockTable"><thead><tr><th>차단ID</th><th>차단 키워드</th><th>차단일시</th></tr></thead><tbody></tbody></table></div>
+            <div class="form-row tight"><button id="blockUnblockBtn" class="btn">선택 차단 해제</button></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="collectionSection" class="panel hidden">
+        <div class="panel-head"><h2>수집 실행</h2></div>
+
+        <section class="sub-panel collect-run-summary">
+          <div class="sub-head"><h3>설정 요약</h3></div>
+          <div class="collect-summary-grid">
+            <div class="card-metric"><div class="metric-key">수집 주기(분)</div><div id="collectSummaryInterval" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">최대 수집(기본)</div><div id="collectSummaryMax" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">타임아웃(초)</div><div id="collectSummaryTimeout" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">재시도(회)</div><div id="collectSummaryRetry" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">수집 범위</div><div id="collectSummaryScope" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">네이버 연관 동기화</div><div id="collectSummaryNaver" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">선택 채널</div><div id="collectSummaryChannels" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">선택 카테고리</div><div id="collectSummaryCategories" class="metric-val">-</div></div>
+          </div>
+        </section>
+
+        <section class="sub-panel collect-run-action">
+          <div class="sub-head">
+            <h3>실행</h3>
+            <div class="form-row tight">
+              <button id="collectGuideBtn" class="btn ghost">실행 안내</button>
+              <button id="collectRunBtn" class="btn">수집 실행</button>
+              <button id="collectStopBtn" class="btn danger" disabled>중단</button>
+            </div>
+          </div>
+          <p class="hint" id="collectAutoStatusHint">자동 수집 상태: -</p>
+          <p class="hint">수집 설정에 저장된 범위/채널/카테고리 기준으로 실행됩니다.</p>
+        </section>
+
+        <section class="sub-panel collect-run-log">
+          <div class="sub-head">
+            <h3>실행 로그 대시보드</h3>
+            <div class="form-row tight"><button id="collectLogClearBtn" class="btn ghost">로그 지우기</button></div>
+          </div>
+          <div class="table-wrap"><table id="collectLogTable"><thead><tr><th>실행 로그</th></tr></thead><tbody></tbody></table></div>
+        </section>
+      </section>
+
+            <section id="collectedDataSection" class="panel hidden">
+        <div class="panel-head"><h2>수집 데이터 / 라벨 검수</h2></div>
+        <div class="form-row tight">
+          <button id="tabTextBtn" class="btn">수집 텍스트</button>
+          <button id="tabImageBtn" class="btn ghost">수집 이미지</button>
+          <button id="collectedRefreshBtn" class="btn">새로고침</button>
+        </div>
+
+        <div id="collectedTextPane" class="collected-board-wrap">
+          <div class="table-wrap">
+            <table id="collectedContentTable">
+              <thead>
+                <tr>
+                  <th>ID</th><th>제목</th><th>키워드</th><th>채널</th><th>수집일시</th><th>작업</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="collectedContentPager" class="pager-row"></div>
+        </div>
+
+        <div id="collectedImagePane" class="collected-board-wrap hidden">
+          <div id="collectedImageGallery" class="collected-gallery"></div>
+          <div id="collectedImagePager" class="pager-row"></div>
+        </div>
+      </section>
+      <section id="labelingSection" class="panel hidden">
+        <div class="panel-head"><h2>라벨링 실행</h2><button id="labelingRefreshBtn" class="btn">새로고침</button></div>
+        <p id="labelingStats" class="hint">-</p>
+        <p id="labelingQueueHint" class="hint">-</p>
+        <div class="form-row"><button id="runContentLabelingBtn" class="btn">미라벨링 텍스트 라벨링</button><button id="runImageLabelingBtn" class="btn">미라벨링 이미지 라벨링</button><button id="retryFailedLabelingBtn" class="btn ghost" disabled>실패 재시도</button></div>
+        <div class="table-wrap"><table id="labelingLogTable"><thead><tr><th>실행 로그</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section id="personaSection" class="panel hidden">
+        <div class="panel-head"><h2>페르소나 관리</h2><div class="form-row tight"><input id="personaSearchInput" type="text" placeholder="이름/톤/성격 검색"/><select id="personaActiveFilter"><option value="all">전체</option><option value="active">활성만</option><option value="inactive">비활성만</option></select><button id="personaRefreshBtn" class="btn">새로고침</button></div></div>
+        <div class="manage-layout">
+          <div class="manage-card-pane">
+            <div id="personaCardList" class="manage-card-list"></div>
+          </div>
+          <div class="manage-form-pane">
+            <div class="manage-form-grid">
+              <div class="manage-form-item"><label>이름</label><input id="personaName" placeholder="예: 정보형 리뷰어"/></div>
+              <div class="manage-form-item"><label>연령</label><input id="personaAge" placeholder="예: 30대"/></div>
+              <div class="manage-form-item"><label>성별</label><input id="personaGender" placeholder="예: 여성"/></div>
+              <div class="manage-form-item"><label>성격</label><input id="personaPersonality" placeholder="예: 꼼꼼함"/></div>
+              <div class="manage-form-item"><label>관심사</label><input id="personaInterests" placeholder="예: IT, 생산성"/></div>
+              <div class="manage-form-item"><label>말투</label><input id="personaSpeech" placeholder="예: 친근하고 명확"/></div>
+              <div class="manage-form-item"><label>톤</label><input id="personaTone" placeholder="예: 차분함"/></div>
+              <div class="manage-form-item manage-span-2"><label>스타일 가이드</label><textarea id="personaStyle" rows="3" placeholder="문장 스타일, 금지 표현 등"></textarea></div>
+              <div class="manage-form-item manage-span-2"><label>금칙어</label><input id="personaBanned" placeholder="쉼표(,)로 구분"/></div>
+            </div>
+            <div class="form-row manage-switch-row">
+              <label class="switch-inline"><span>활성</span><input id="personaActive" type="checkbox" checked/></label>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="personaUpdateBtn" class="btn ghost">선택 페르소나 수정</button>
+              <button id="personaDeleteBtn" class="btn danger">선택 페르소나 삭제</button>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="personaPreviewBtn" class="btn ghost">샘플 문체 미리보기</button>
+              <button id="personaAddBtn" class="btn">페르소나 추가</button>
+            </div>
+            <p id="personaCollisionHint" class="hint">금칙어 충돌 없음</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="templateSection" class="panel hidden">
+        <div class="panel-head"><h2>템플릿 관리</h2><button id="templateRefreshBtn" class="btn">새로고침</button></div>
+        <div class="manage-layout">
+          <div class="manage-card-pane">
+            <div id="templateCardList" class="manage-card-list"></div>
+          </div>
+          <div class="manage-form-pane">
+            <div class="manage-form-grid">
+              <div class="manage-form-item"><label>템플릿 이름</label><input id="templateName" placeholder="예: 제품 리뷰형"/></div>
+              <div class="manage-form-item"><label>템플릿 유형</label><select id="templateType"><option value="blog">블로그형</option><option value="sns">SNS형</option><option value="board">게시판형</option></select></div>
+              <div class="manage-form-item"><label>버전</label><input id="templateVersion" type="number" min="1" value="1"/></div>
+              <div class="manage-form-item manage-span-2"><label>프롬프트 템플릿</label><textarea id="templatePrompt" rows="5" placeholder="프롬프트 템플릿"></textarea></div>
+              <div class="manage-form-item manage-span-2"><label>출력 형식 메모</label><input id="templateSchema" placeholder="예: 제목/소제목/요약 구조"/></div>
+            </div>
+            <div class="form-row manage-switch-row">
+              <label class="switch-inline"><span>활성</span><input id="templateActive" type="checkbox" checked/></label>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="templateUpdateBtn" class="btn ghost">선택 템플릿 수정</button>
+              <button id="templateDeleteBtn" class="btn danger">선택 템플릿 삭제</button>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="templateDiffBtn" class="btn ghost">버전 Diff 보기</button>
+              <button id="templateCloneBtn" class="btn ghost">새 버전 복제</button>
+              <button id="templateAddBtn" class="btn">템플릿 추가</button>
+            </div>
+            <div class="form-row manage-actions-row">
+              <input id="templateTestSample" placeholder="샘플 입력 (예: 키워드=무선청소기)" />
+              <button id="templateTestRunBtn" class="btn ghost">템플릿 테스트</button>
+            </div>
+            <p id="templateTestHint" class="hint">-</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="aiProviderSection" class="panel hidden">
+        <div class="panel-head"><h2>AI API 관리</h2><button id="providerRefreshBtn" class="btn">새로고침</button></div>
+        <div class="manage-layout">
+          <div class="manage-card-pane">
+            <div id="providerCardList" class="manage-card-list"></div>
+          </div>
+          <div class="manage-form-pane">
+            <div class="manage-form-grid">
+              <div class="manage-form-item"><label>Provider</label><input id="providerName" placeholder="예: openai"/></div>
+              <div class="manage-form-item"><label>Model</label><input id="providerModel" placeholder="예: gpt-4.1-mini"/></div>
+              <div class="manage-form-item"><label>Key Alias</label><input id="providerAlias" placeholder="예: OPENAI_API_KEY"/></div>
+              <div class="manage-form-item"><label>우선순위</label><input id="providerPriority" type="number" min="1" value="1"/></div>
+              <div class="manage-form-item"><label>RPM 제한</label><input id="providerRpm" type="number" min="0" value="60"/></div>
+              <div class="manage-form-item"><label>일 예산 제한</label><input id="providerBudget" type="number" min="0" value="100"/></div>
+              <div class="manage-form-item manage-span-2"><label>상태</label><select id="providerStatus"><option>ready</option><option>error</option><option>blocked</option><option>unknown</option></select></div>
+            </div>
+            <div class="form-row manage-switch-row">
+              <label class="switch-inline"><span>유료</span><input id="providerPaid" type="checkbox"/></label>
+              <label class="switch-inline"><span>활성</span><input id="providerEnabled" type="checkbox" checked/></label>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="providerHealthBtn" class="btn ghost">상태 체크</button>
+              <button id="providerNormalizePriorityBtn" class="btn ghost">우선순위 자동 정렬</button>
+              <button id="providerUpdateBtn" class="btn ghost">선택 API 수정</button>
+              <button id="providerDeleteBtn" class="btn danger">선택 API 삭제</button>
+            </div>
+            <div class="form-row manage-actions-row">
+              <button id="providerAddBtn" class="btn">API 추가</button>
+            </div>
+            <p id="providerAliasHint" class="hint">-</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="writerRunSection" class="panel hidden">
+        <div class="panel-head"><h2>글 작성 실행</h2></div>
+        <section class="sub-panel collect-run-summary">
+          <div class="sub-head"><h3>설정 요약</h3><button id="writerRefreshBtn" class="btn">새로고침</button></div>
+          <div class="collect-summary-grid">
+            <div class="card-metric"><div class="metric-key">활성 채널 수</div><div id="writerSummaryChannelCount" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">정책 유효 채널</div><div id="writerSummaryPolicyReady" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">총 회차당 생성</div><div id="writerSummaryBatchTotal" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">자동 작성 활성 채널</div><div id="writerSummaryAutoEnabled" class="metric-val">-</div></div>
+          </div>
+          <div class="table-wrap">
+            <table id="writerSummaryTable">
+              <thead><tr><th>채널</th><th>페르소나</th><th>템플릿</th><th>AI 모델</th><th>회차 생성</th><th>상태</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="sub-panel collect-run-summary">
+          <div class="sub-head">
+            <h3>실행</h3>
+            <div class="form-row tight">
+              <button id="writerGuideBtn" class="btn ghost">실행 안내</button>
+              <button id="writerRunBtn" class="btn">글 작성 실행</button>
+              <button id="writerStopBtn" class="btn danger" disabled>중단</button>
+              <button id="writerResumeBtn" class="btn ghost" disabled>재개</button>
+              <button id="writerLogClearBtn" class="btn ghost">로그 지우기</button>
+              <button id="writerLogDownloadTxtBtn" class="btn ghost">TXT 다운로드</button>
+              <button id="writerLogDownloadCsvBtn" class="btn ghost">CSV 다운로드</button>
+            </div>
+          </div>
+          <p class="hint" id="writerAutoStatusHint">자동 작성 상태: -</p>
+          <p class="hint" id="writerRunStatusHint">대기 중</p>
+          <p class="hint" id="writerRunChannelMetricHint">-</p>
+          <div class="table-wrap"><table id="writerLogTable"><thead><tr><th>실행 로그</th></tr></thead><tbody></tbody></table></div>
+        </section>
+      </section>
+
+      <section id="writerResultSection" class="panel hidden">
+        <div class="panel-head"><h2>작성 결과</h2></div>
+        <section class="sub-panel collect-run-summary">
+          <div class="sub-head">
+            <h3>작성 결과 게시판</h3>
+            <div class="form-row tight">
+              <select id="writerBoardPublishChannel"></select>
+              <button id="writerResultRefreshBtn" class="btn ghost">새로고침</button>
+            </div>
+          </div>
+          <div class="form-row tight">
+            <input id="writerBoardSearch" type="text" placeholder="제목/상태/채널 검색" />
+            <select id="writerBoardStatusFilter">
+              <option value="all">전체 상태</option>
+              <option value="draft">초안</option>
+              <option value="ready">발행대기</option>
+              <option value="publish_done">발행완료</option>
+              <option value="publish_failed">발행실패</option>
+              <option value="unpublished">미발행</option>
+            </select>
+            <button id="writerBoardFilterResetBtn" class="btn ghost">필터 초기화</button>
+          </div>
+          <p class="hint">자동 허용 채널 선택 후, 글별 `즉시 발행`으로 바로 발행합니다.</p>
+          <div class="form-row tight">
+            <button id="writerBoardBulkPublishBtn" class="btn">선택 항목 즉시 발행</button>
+            <select id="writerBoardBulkStatus">
+              <option value="">상태 일괄 변경</option>
+              <option value="draft">초안</option>
+              <option value="ready">발행대기</option>
+            </select>
+            <button id="writerBoardBulkStatusBtn" class="btn ghost">적용</button>
+          </div>
+          <div class="table-wrap">
+            <table id="writerBoardTable">
+              <thead><tr><th><input id="writerBoardPickAll" type="checkbox"/></th><th>ID</th><th>제목</th><th>작성상태</th><th>발행상태</th><th>발행채널</th><th>생성시각</th><th>작업</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="writerBoardPager" class="pager-row"></div>
+        </section>
+      </section>
+
+      <section id="publisherSection" class="panel hidden">
+        <div class="panel-head"><h2>발행 실행</h2><button id="publisherRefreshBtn" class="btn">새로고침</button></div>
+        <section class="sub-panel collect-run-summary">
+          <div class="sub-head"><h3>자동 발행 상태</h3></div>
+          <div class="collect-summary-grid">
+            <div class="card-metric"><div class="metric-key">자동 발행</div><div id="publishAutoEnabled" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">워커 상태</div><div id="publishAutoWorker" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">자동 채널 수</div><div id="publishAutoChannelCount" class="metric-val">-</div></div>
+            <div class="card-metric"><div class="metric-key">최근 처리 건수</div><div id="publishAutoLastProcessed" class="metric-val">-</div></div>
+          </div>
+          <p class="hint" id="publishAutoLastTickHint">최근 실행: -</p>
+          <p class="hint" id="publishAutoStatusHint">자동 발행 상태: -</p>
+          <div class="table-wrap"><table id="publishAutoNextRunTable"><thead><tr><th>채널</th><th>주기(분)</th><th>다음 실행 시각</th></tr></thead><tbody></tbody></table></div>
+        </section>
+        <section class="sub-panel collect-run-action">
+          <div class="sub-head">
+            <h3>실행</h3>
+            <div class="form-row tight">
+              <button id="publishAutoStartBtn" class="btn">자동 발행 시작</button>
+              <button id="publishAutoStopBtn" class="btn danger">자동 발행 중지</button>
+              <button id="publishAutoTickBtn" class="btn ghost">1회 즉시 실행</button>
+              <input id="publishAutoPauseUntil" type="datetime-local"/>
+              <button id="publishAutoPauseBtn" class="btn ghost">일시중지 예약</button>
+              <button id="publishAutoResumeBtn" class="btn ghost">예약 해제/재개</button>
+            </div>
+          </div>
+          <p class="hint">발행 설정에 저장된 채널별 주기/모드 기준으로 실행합니다.</p>
+        </section>
+        <section class="sub-panel collect-run-log">
+          <div class="sub-head"><h3>자동 발행 로그</h3></div>
+          <div class="table-wrap"><table id="publishAutoLogTable"><thead><tr><th>실행 로그</th></tr></thead><tbody></tbody></table></div>
+        </section>
+        <section class="sub-panel">
+          <div class="sub-head">
+            <h3>최근 발행 이력</h3>
+            <div class="form-row tight">
+              <button id="publisherHistoryResetBtn" class="btn ghost">필터 초기화</button>
+            </div>
+          </div>
+          <div class="form-row tight">
+            <input id="publisherHistoryFrom" type="date"/>
+            <input id="publisherHistoryTo" type="date"/>
+            <select id="publisherHistoryStatusFilter">
+              <option value="all">전체 상태</option>
+              <option value="done">성공</option>
+              <option value="failed">실패</option>
+              <option value="queued">대기</option>
+              <option value="processing">처리중</option>
+            </select>
+            <select id="publisherHistoryChannelFilter"></select>
+            <input id="publisherHistorySearch" type="text" placeholder="글ID/메시지 검색" />
+            <button id="publisherHistoryExportCsvBtn" class="btn ghost">CSV 내보내기</button>
+          </div>
+          <div class="form-row tight">
+            <label>재처리 정책</label>
+            <select id="publisherRetryMode"><option value="immediate">즉시</option><option value="delayed">지연</option><option value="limited">횟수 제한</option></select>
+            <label>지연(분)</label><input id="publisherRetryDelayMin" type="number" min="1" max="1440" value="30"/>
+            <label>최대횟수</label><input id="publisherRetryMaxCount" type="number" min="1" max="20" value="3"/>
+          </div>
+          <div class="table-wrap"><table id="publisherJobTable"><thead><tr><th>ID</th><th>글ID</th><th>채널</th><th>모드</th><th>상태</th><th>메시지</th><th>생성시각</th></tr></thead><tbody></tbody></table></div>
+          <div id="publisherJobPager" class="pager-row"></div>
+        </section>
+      </section>
+      <section id="collectSettingsSection" class="panel hidden">
+        <div class="panel-head"><h2>수집 설정</h2></div>
+
+        <div class="collect-setting-grid">
+          <div class="collect-setting-item"><label>수집 주기(분)</label><input id="collectSettingInterval" type="number" min="5" max="1440" value="60"/></div>
+          <div class="collect-setting-item"><label>키워드당 최대 수집</label><input id="collectSettingMaxResults" type="number" min="1" max="20" value="3"/></div>
+          <div class="collect-setting-item"><label>타임아웃(초)</label><input id="collectSettingTimeout" type="number" min="3" max="120" value="15"/></div>
+          <div class="collect-setting-item"><label>재시도(회)</label><input id="collectSettingRetry" type="number" min="0" max="5" value="1"/></div>
+        </div>
+
+        <div class="sub-panel collect-setting-mode">
+          <h3>수집 선택</h3>
+          <div class="form-row tight">
+            <label><input type="radio" name="collectSettingScope" id="collectScopeAll" value="all"/> 전체 수집</label>
+            <label><input type="radio" name="collectSettingScope" id="collectScopeSelected" value="selected" checked/> 체크된 내역만 수집</label>
+            <label><input type="radio" name="collectSettingScope" id="collectScopeRelated" value="related"/> 키워드 확장(연관키워드 포함)</label>
+            <label><input id="collectSettingNaverRelated" type="checkbox" checked/> 네이버 연관키워드 동기화</label>
+          </div>
+        </div>
+
+        <div class="collect-setting-lists">
+          <section class="sub-panel collect-setting-list">
+            <div class="sub-head">
+              <h3>채널 목록 <span id="collectChannelCount" class="hint">0/0</span></h3>
+              <label><input id="collectChannelAll" type="checkbox"/> 전체 선택</label>
+            </div>
+            <div class="form-row tight"><input id="collectChannelSearch" type="text" placeholder="채널 검색 (이름/코드)"/></div>
+            <div id="collectChannelChecklist" class="checklist-wrap"></div>
+          </section>
+          <section class="sub-panel collect-setting-list">
+            <div class="sub-head">
+              <h3>카테고리 <span id="collectCategoryCount" class="hint">0/0</span></h3>
+              <label><input id="collectCategoryAll" type="checkbox"/> 전체 선택</label>
+            </div>
+            <div class="form-row tight"><input id="collectCategorySearch" type="text" placeholder="카테고리 검색"/></div>
+            <div id="collectCategoryChecklist" class="checklist-wrap"></div>
+          </section>
+        </div>
+
+        <p class="hint">범위: 주기 5~1440분, 최대수집 1~20개, 타임아웃 3~120초, 재시도 0~5회</p>
+        <p id="collectSettingValidationHint" class="hint">-</p>
+        <p id="collectSettingDiffPreview" class="hint">변경사항 없음</p>
+        <div class="form-row">
+          <button id="collectSettingSaveBtn" class="btn">저장</button>
+          <button id="collectSettingResetBtn" class="btn ghost">기본값 복원</button>
+        </div>
+      </section>
+
+      <section id="labelSettingsSection" class="panel hidden">
+        <div class="panel-head"><h2>라벨링 설정</h2></div>
+        <div class="form-row tight">
+          <label>프리셋</label>
+          <select id="labelSettingPreset">
+            <option value="default">기본</option>
+            <option value="strict">보수(품질 우선)</option>
+            <option value="aggressive">공격(처리량 우선)</option>
+          </select>
+          <button id="labelSettingPresetApplyBtn" class="btn ghost">프리셋 적용</button>
+        </div>
+        <div class="form-row">
+          <label>방식</label><select id="labelSettingMethod"><option value="rule">rule</option><option value="ai">ai</option></select>
+          <label>배치 크기</label><input id="labelSettingBatch" type="number" min="10" max="1000" value="300"/>
+          <label>품질 임계값</label><input id="labelSettingQuality" type="number" min="1" max="5" value="3"/>
+          <label>재라벨링 정책</label><select id="labelSettingPolicy"><option value="skip">skip</option><option value="overwrite">overwrite</option></select>
+          <button id="labelSettingSaveBtn" class="btn">저장</button>
+        </div>
+        <p id="labelSettingModeHint" class="hint">-</p>
+        <p id="labelSettingQualityHint" class="hint">-</p>
+      </section>
+
+      <section id="writerSettingsSection" class="panel hidden">
+        <div class="panel-head"><h2>글 작성 설정</h2></div>
+        <div id="writerPolicyPanel" class="sub-panel">
+          <div class="sub-head">
+            <h3>채널별 작성 정책</h3>
+            <div class="form-row tight">
+              <label>정책 복사 대상</label>
+              <select id="writerPolicyCopyTarget"></select>
+              <button id="writerPolicyCopyBtn" class="btn ghost" type="button">현재 정책 복사</button>
+            </div>
+            <div id="writerPolicyTabs" class="writer-policy-tabs"></div>
+          </div>
+          <div class="writer-setting-grid">
+            <div class="writer-setting-item"><label>기본 AI 모델</label><select id="writerSettingAiProviderId"></select></div>
+            <div class="writer-setting-item"><label>AI 우선순위</label><select id="writerSettingAiPriority"><option value="cost_first">비용 우선</option><option value="quality_first">품질 우선</option><option value="latency_first">속도 우선</option></select></div>
+            <div class="writer-setting-item"><label>최소 소스 개수</label><input id="writerSettingMinSource" type="number" min="1" max="20" value="3"/></div>
+            <div class="writer-setting-item"><label>기본 톤</label><select id="writerSettingTone"><option value="informative">정보형</option><option value="friendly">친근형</option><option value="professional">전문가형</option><option value="review">후기형</option></select></div>
+            <div class="writer-setting-item"><label>독자 수준</label><select id="writerSettingReaderLevel"><option value="general">일반</option><option value="beginner">초급</option><option value="intermediate">중급</option><option value="advanced">고급</option></select></div>
+            <div class="writer-setting-item"><label>기본 분량</label><select id="writerSettingLength"><option value="short">짧게</option><option value="medium">보통</option><option value="long">길게</option></select></div>
+            <div class="writer-setting-item"><label>창의성(1~5)</label><input id="writerSettingCreativity" type="number" min="1" max="5" value="3"/></div>
+            <div class="writer-setting-item"><label>사실성(1~5)</label><input id="writerSettingFactuality" type="number" min="1" max="5" value="4"/></div>
+            <div class="writer-setting-item"><label>SEO 키워드</label><input id="writerSettingSeoKeywords" placeholder="키워드1, 키워드2"/></div>
+            <div class="writer-setting-item"><label>자동 작성 활성</label><label><input id="writerSettingAutoEnabled" type="checkbox"/> 자동 작성 사용</label></div>
+            <div class="writer-setting-item"><label>자동 작성 주기(분)</label><input id="writerSettingAutoInterval" type="number" min="5" max="10080" value="1440"/></div>
+            <div class="writer-setting-item"><label>회차당 생성 개수</label><input id="writerSettingAutoBatch" type="number" min="1" max="20" value="1"/></div>
+            <div class="writer-setting-item"><label>실패 재시도</label><input id="writerSettingAutoRetry" type="number" min="0" max="10" value="1"/></div>
+            <div class="writer-setting-item"><label>실행 시간대</label><input id="writerSettingAutoWindow" placeholder="예: 09:00-18:00" value="00:00-23:59"/></div>
+          </div>
+          <section class="sub-panel collect-setting-list writer-secondary-channel-panel">
+            <div class="sub-head">
+              <h3>사용 페르소나 <span id="writerPersonaPickCount" class="hint">0/0</span></h3>
+              <label><input id="writerPersonaPickAll" type="checkbox"/> 전체 선택</label>
+            </div>
+            <div id="writerSettingPersonaChecklist" class="checklist-wrap"></div>
+          </section>
+          <section class="sub-panel collect-setting-list writer-secondary-channel-panel">
+            <div class="sub-head">
+              <h3>사용 템플릿 <span id="writerTemplatePickCount" class="hint">0/0</span></h3>
+              <label><input id="writerTemplatePickAll" type="checkbox"/> 전체 선택</label>
+            </div>
+            <div id="writerSettingTemplateChecklist" class="checklist-wrap"></div>
+          </section>
+          <div class="form-row"><button id="writerSettingSaveBtn" class="btn">설정 저장</button></div>
+        </div>
+
+        <div id="writerChannelManagePanel" class="sub-panel">
+          <div class="sub-head"><h3>작성 채널 등록/관리</h3><div class="form-row tight"><label>정렬</label><select id="writerChannelSort"><option value="name_asc">이름 오름차순</option><option value="status_first">상태 우선</option><option value="enabled_first">활성 우선</option><option value="created_desc">최신 생성순</option></select><button id="writerChannelRefreshBtn" class="btn">새로고침</button></div></div>
+          <div class="writer-channel-layout">
+            <div class="writer-channel-card-pane">
+              <div id="writerChannelCardList" class="writer-channel-card-list"></div>
+            </div>
+            <div class="writer-channel-form-pane">
+              <div class="writer-channel-grid">
+                <div class="writer-setting-item"><label>채널 코드</label><input id="writerChannelCode" placeholder="예: naver_blog"/></div>
+                <div class="writer-setting-item"><label>채널명</label><input id="writerChannelName" placeholder="예: 네이버 블로그"/></div>
+                <div class="writer-setting-item"><label>채널 유형</label><select id="writerChannelType"><option value="blog">블로그</option><option value="cms">CMS</option><option value="sns">SNS 롱폼</option><option value="board">커뮤니티</option><option value="custom_api">커스텀 API</option></select></div>
+                <div class="writer-setting-item"><label>연결 방식</label><select id="writerChannelConnection"><option value="api">API 연동</option><option value="manual">수동 발행</option><option value="rss_email">RSS/이메일 연동</option></select></div>
+                <div class="writer-setting-item"><label>상태</label><select id="writerChannelStatus"><option value="active">활성</option><option value="expiring">만료임박</option><option value="auth_error">인증오류</option><option value="paused">중지</option></select></div>
+                <div class="writer-setting-item"><label>인증 방식</label><select id="writerChannelAuthType"><option value="">사용 안함</option><option value="id_password">아이디/비밀번호</option><option value="token">API 키(토큰)</option><option value="oauth">OAuth</option><option value="app_password">앱 비밀번호</option></select></div>
+                <div class="writer-setting-item"><label>로그인 ID</label><input id="writerChannelLoginId" placeholder="예: account@example.com"/></div>
+                <div class="writer-setting-item"><label>비밀번호</label><input id="writerChannelPassword" type="password" placeholder="선택 입력"/></div>
+                <div class="writer-setting-item"><label>API 키</label><input id="writerChannelApiKey" type="password" placeholder="선택 입력"/></div>
+                <div class="writer-setting-item"><label>API 접속 URL</label><input id="writerChannelApiUrl" placeholder="https://api.example.com/post"/></div>
+                <div class="writer-setting-item writer-span-2"><label>제휴 문구 프리셋</label><div class="form-row tight"><select id="writerAffiliatePreset"><option value="">선택 안함</option><option value="commerce">커머스 기본</option><option value="review">리뷰형 고지</option><option value="short">짧은 안내</option></select><button id="writerAffiliatePresetApplyBtn" class="btn ghost" type="button">프리셋 적용</button></div></div>
+                <div class="writer-setting-item writer-span-2"><label>제휴 문구</label><textarea id="writerChannelAffiliateText" rows="2" placeholder="예: 이 글에는 제휴 링크가 포함될 수 있으며, 구매 시 수수료를 받을 수 있습니다."></textarea></div>
+              </div>
+              <p id="writerChannelCodePolicyHint" class="hint">코드 정책: 신규 생성 시에만 입력/수정 가능, 등록 이후 변경 불가</p>
+              <p id="writerAuthChangeHint" class="hint">인증정보 변경 없음</p>
+              <p id="writerChannelValidationHint" class="hint">-</p>
+              <div class="form-row writer-channel-switch-row">
+                <label class="switch-field"><span>활성</span><span class="switch"><input id="writerChannelEnabled" type="checkbox" checked/><span class="switch-slider"></span></span></label>
+                <label class="switch-field"><span>제휴문구 필수</span><span class="switch"><input id="writerChannelAffiliate" type="checkbox"/><span class="switch-slider"></span></span></label>
+              </div>
+              <div class="form-row writer-channel-actions-row">
+                <button id="writerChannelUpdateBtn" class="btn ghost">선택 채널 수정 저장</button>
+                <button id="writerChannelToggleBtn" class="btn ghost">선택 채널 활성/비활성</button>
+              </div>
+              <div class="form-row writer-channel-actions-row">
+                <button id="writerChannelAddBtn" class="btn">채널 추가</button>
+                <button id="writerChannelDeleteBtn" class="btn danger">선택 채널 삭제</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="publishSettingsSection" class="panel hidden">
+        <div class="panel-head"><h2>발행 설정</h2></div>
+        <section class="sub-panel">
+          <div class="sub-head"><h3>공통 설정</h3></div>
+          <div class="form-row">
+            <label>기본 발행 모드</label><select id="publishSettingModeV2"><option value="semi_auto">반자동</option><option value="auto">자동</option></select>
+            <label>기본 주기(분)</label><input id="publishSettingCycleV2" type="number" min="5" max="1440" value="60"/>
+            <label>재시도</label><input id="publishSettingRetryV2" type="number" min="0" max="10" value="1"/>
+            <label><input id="publishSettingRequireApproval" type="checkbox" checked/> 승인 필요</label>
+            <button id="publishSettingSaveBtnV2" class="btn">공통 저장</button>
+          </div>
+        </section>
+        <section class="sub-panel">
+          <div class="sub-head">
+            <h3>채널별 발행 설정</h3>
+            <div class="form-row tight">
+              <input id="publishSettingSearch" type="text" placeholder="채널 검색"/>
+              <select id="publishSettingSort"><option value="name_asc">이름 오름차순</option><option value="enabled_first">활성 우선</option><option value="cycle_asc">주기 짧은순</option></select>
+              <button id="publishSettingRefreshBtn" class="btn ghost">새로고침</button>
+              <button id="publishChannelToggleBtn" class="btn ghost">선택 채널 활성/비활성</button>
+            </div>
+          </div>
+          <div class="manage-layout">
+            <div class="manage-card-pane">
+              <div id="publishSettingCardList" class="manage-card-list"></div>
+            </div>
+            <div class="manage-form-pane">
+              <div class="manage-form-grid">
+                <div class="manage-form-item manage-span-2"><label>대상 채널</label><select id="publishSettingChannel"></select></div>
+                <div class="manage-form-item"><label>발행 주기(분)</label><input id="publishSettingCycle" type="number" min="5" max="1440" value="60"/></div>
+                <div class="manage-form-item"><label>발행 모드</label><select id="publishSettingMode"><option value="semi_auto">반자동</option><option value="auto">자동</option></select></div>
+                <div class="manage-form-item"><label>발행 형식</label><select id="publishSettingFormat"><option value="blog">블로그</option><option value="sns">SNS</option><option value="board">게시판</option></select></div>
+                <div class="manage-form-item"><label>작성 형식</label><select id="publishSettingStyle"><option value="informative">정보형</option><option value="emotional">감성형</option><option value="review">후기형</option></select></div>
+                <div class="manage-form-item manage-span-2"><label>API URL</label><input id="publishSettingApi" placeholder="API URL"/></div>
+              </div>
+              <div class="form-row manage-actions-row">
+                <button id="publishSettingTestApiBtn" class="btn ghost">API URL 테스트</button>
+                <button id="publishSettingSaveBtn" class="btn">채널 설정 저장</button>
+              </div>
+              <p id="publishSettingValidationHint" class="hint">-</p>
+              <p id="publishSettingDiffHint" class="hint">변경사항 없음</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="monitorSection" class="panel hidden">
+        <div class="panel-head"><h2>로그/모니터링</h2><button id="monitorRefreshBtn" class="btn">새로고침</button></div>
+        <div class="form-row tight">
+          <label>단계 필터</label><select id="monitorStageFilter"><option value="all">전체</option><option value="collect">수집</option><option value="label_content">라벨(콘텐츠)</option><option value="label_image">라벨(이미지)</option><option value="writer">글작성</option><option value="publish">발행</option></select><label>레벨</label><select id="monitorLevelFilter"><option value="all">전체</option><option value="info">info</option><option value="warn">warn</option><option value="error">error</option></select><label>검색</label><input id="monitorTextFilter" type="text" placeholder="메시지/상태/단계 검색" /><label><input id="monitorStreamEnabled" type="checkbox"/> 실시간</label><label>간격(s)</label><input id="monitorPollSec" type="number" min="2" max="60" value="5"/>
+        </div>
+        <p id="monitorHint" class="hint">-</p>
+        <p id="monitorGroupHint" class="hint">-</p>
+        <div class="table-wrap"><table id="monitorTable"><thead><tr><th>단계</th><th>레벨</th><th>상태</th><th>메시지</th><th>시각</th><th>동작</th></tr></thead><tbody></tbody></table></div>
+        <div class="form-row tight">
+          <button id="monitorPrevPageBtn" class="btn ghost">이전 페이지</button>
+          <button id="monitorNextPageBtn" class="btn ghost">다음 페이지</button>
+          <button id="monitorResetCursorBtn" class="btn ghost">처음부터</button>
+        </div>
+        <p id="monitorCursorHint" class="hint">-</p>
+        <section class="sub-panel">
+          <div class="sub-head">
+            <h3>재시도 큐</h3>
+            <div class="form-row tight">
+              <label>최대 재시도</label><input id="monitorRetryMax" type="number" min="1" max="20" value="5"/>
+              <button id="monitorRetryResetBtn" class="btn ghost">큐 메타 초기화</button>
+            </div>
+          </div>
+          <p id="monitorRetryHint" class="hint">-</p>
+          <div class="table-wrap"><table id="monitorRetryTable"><thead><tr><th>키</th><th>우선순위</th><th>시도</th><th>다음 backoff</th><th>메시지</th><th>동작</th></tr></thead><tbody></tbody></table></div>
+          <p id="monitorRetryArchiveHint" class="hint">-</p>
+          <div class="table-wrap"><table id="monitorRetryArchiveTable"><thead><tr><th>키</th><th>시도</th><th>메시지</th><th>최근시각</th></tr></thead><tbody></tbody></table></div>
+        </section>
+      </section>
+
+      <section id="placeholderSection" class="panel hidden">
+        <div class="panel-head"><h2 id="placeholderTitle">준비 중</h2></div>
+        <p class="hint" id="placeholderDesc">이 메뉴는 웹 UI로 전환 중입니다.</p>
+      </section>
+    </main>
+    </div>
+  </div>
+  <div id="appModal" class="app-modal hidden" aria-hidden="true">
+    <div id="appModalBackdrop" class="app-modal-backdrop"></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+      <div class="app-modal-head"><h3 id="appModalTitle">알림</h3><span id="appModalBadge" class="app-modal-badge">INFO</span></div>
+      <div id="appModalMessage" class="app-modal-message"></div>
+      <div id="appModalActions" class="app-modal-actions"></div>
+    </div>
+  </div>
+
+  <div id="collectedDetailModal" class="app-modal hidden" aria-hidden="true">
+    <div id="collectedDetailBackdrop" class="app-modal-backdrop"></div>
+    <div class="app-modal-panel collected-detail-panel" role="dialog" aria-modal="true" aria-labelledby="collectedDetailTitle">
+      <div class="app-modal-head">
+        <h3 id="collectedDetailTitle">상세 보기</h3>
+        <button id="collectedDetailCloseX" class="btn ghost" type="button">닫기</button>
+      </div>
+      <div id="collectedDetailTextBody" class="collected-detail-body hidden">
+        <div class="form-row"><input id="contentSourceUrl" type="text" readonly placeholder="원문 URL" /></div>
+        <div class="form-row"><textarea id="contentBodyHtml" class="mublo-editor" rows="16" placeholder="수집 본문"></textarea></div>
+        <div class="sub-panel">
+          <h3>텍스트 라벨 수정</h3>
+          <div class="form-row">
+            <input id="contentTone" type="text" placeholder="톤" />
+            <input id="contentSentiment" type="text" placeholder="감성" />
+            <input id="contentTopics" type="text" placeholder="주제(쉼표구분)" />
+            <input id="contentQuality" type="number" min="1" max="5" value="3" />
+            <button id="contentLabelSaveBtn" class="btn" type="button">텍스트 라벨 저장</button>
+          </div>
+        </div>
+      </div>
+      <div id="collectedDetailImageBody" class="collected-detail-body hidden">
+        <div class="form-row"><input id="imageUrlView" type="text" readonly placeholder="선택 이미지 URL" /></div>
+        <div class="image-preview-wrap"><img id="imagePreview" alt="선택 이미지 미리보기" /></div>
+        <div class="sub-panel">
+          <h3>이미지 라벨 수정</h3>
+          <div class="form-row">
+            <input id="imageCategory" type="text" placeholder="카테고리" />
+            <input id="imageMood" type="text" placeholder="분위기" />
+            <input id="imageQuality" type="number" min="1" max="5" value="3" />
+            <label><input id="imageThumb" type="checkbox" /> 썸네일 후보</label>
+            <button id="imageLabelSaveBtn" class="btn" type="button">이미지 라벨 저장</button>
+          </div>
+        </div>
+      </div>
+      <div class="app-modal-actions">
+        <button id="collectedDetailCloseBtn" class="btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+  <script src="/assets/mublo-editor/MubloEditor.js?v=20260301c"></script>
+  <script>if (typeof window.MubloEditor === "undefined" && typeof MubloEditor !== "undefined") { window.MubloEditor = MubloEditor; }</script>
+  <script src="/assets/web-shell/app.config.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.dialog.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.common.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.native-select.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.shell.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.collection-ui.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.dashboard.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.labeling.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.collect-settings.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.collection-run.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.manage.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.writer-channel.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.publish-settings.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.monitor.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.publisher.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.collected-data.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.writer-run.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.js?v=20260302b"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
