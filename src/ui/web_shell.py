@@ -26,6 +26,7 @@ from collector.service import crawl_service
 from collector.scheduler import collect_scheduler
 from core.settings import settings
 from labeling import labeling_service
+from labeling.scheduler import labeling_auto_scheduler
 from publisher import publisher_service
 from core.settings_keys import (
     CollectSettingKeys,
@@ -379,11 +380,13 @@ class _WebShellServer:
     def _copy_assets(self) -> None:
         source_dir = settings.project_root / "src" / "ui" / "assets" / "web-shell"
         if source_dir.exists():
-            for name in ["index.html", "style.css", "app.js"]:
-                src = source_dir / name
-                dst = self.assets_dir / name
-                if src.exists():
-                    shutil.copy2(src, dst)
+            for src in source_dir.rglob("*"):
+                if not src.is_file():
+                    continue
+                rel = src.relative_to(source_dir)
+                dst = self.assets_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
 
         mublo_source = settings.project_root / "src" / "ui" / "assets" / "mublo-editor"
         mublo_target = self.runtime_dir / "assets" / "mublo-editor"
@@ -513,6 +516,15 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             return self._serve_dashboard_summary()
         if route == "/api/labeling/stats":
             return self._write_json(LabelRepository.get_label_stats())
+        if route == "/api/labeling/auto/status":
+            return self._write_json(labeling_auto_scheduler.status())
+        if route == "/api/labeling/status-counts":
+            return self._write_json(LabelRepository.get_label_status_counts())
+        if route == "/api/labeling/runs":
+            limit = max(10, min(200, _to_int((query.get("limit") or ["50"])[0]) or 50))
+            return self._serve_labeling_run_logs(limit=limit)
+        if route == "/api/labeling/automation-snapshot":
+            return self._serve_labeling_automation_snapshot()
         if route == "/api/personas":
             return self._serve_personas()
         if route == "/api/templates":
@@ -726,6 +738,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             batch_size = _to_int(AppSettingRepository.get_value(LabelSettingKeys.BATCH_SIZE, "300")) or 300
             batch_size = max(10, min(1000, batch_size))
             result = labeling_service.label_unlabeled_images(limit=batch_size)
+            return self._write_json({"ok": True, **result})
+        if route == "/api/labeling/auto/tick":
+            result = labeling_auto_scheduler.run_once()
             return self._write_json({"ok": True, **result})
 
         if route == "/api/personas":
@@ -972,6 +987,7 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_automation_status(self) -> None:
         collect_status = collect_scheduler.status()
+        labeling_status = labeling_auto_scheduler.status()
         publish_status = publish_auto_runner.status()
         writer_auto = writer_auto_scheduler.status()
         manual_writer = writer_run_control.status()
@@ -980,6 +996,7 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         return self._write_json(
             {
                 "collect": collect_status,
+                "labeling": labeling_status,
                 "writer": writer_auto,
                 "publish": publish_status,
             }
@@ -1019,6 +1036,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                     "title": row.title,
                     "source_url": row.source_url,
                     "body_text": row.body_text,
+                    "label_status": row.label_status or "pending",
+                    "label_attempt_count": int(row.label_attempt_count or 0),
+                    "label_confidence": int(row.label_confidence or 0) if row.label_confidence is not None else None,
                     "created_at": _dt_to_iso(row.created_at),
                 }
                 for row in rows
@@ -1044,6 +1064,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                     "image_url": row.image_url,
                     "local_path": row.local_path or "",
                     "local_url": f"/api/collected/images/{row.id}/file" if row.local_path else "",
+                    "label_status": row.label_status or "pending",
+                    "label_attempt_count": int(row.label_attempt_count or 0),
+                    "label_confidence": int(row.label_confidence or 0) if row.label_confidence is not None else None,
                 }
                 for row in rows
             ]
@@ -1226,7 +1249,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             sentiment=(str(data.get("sentiment") or "").strip() or None),
             topics=[str(item).strip() for item in topics if str(item).strip()],
             quality_score=max(1, min(5, _to_int(data.get("quality_score")) or 3)),
+            label_method="manual",
         )
+        LabelRepository.mark_content_labeled(content_id=content_id, confidence=1.0, stage_status="completed", completed=True)
         return self._write_json({"ok": True})
 
     def _save_image_label(self) -> None:
@@ -1242,7 +1267,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             mood=(str(data.get("mood") or "").strip() or None),
             quality_score=max(1, min(5, _to_int(data.get("quality_score")) or 3)),
             is_thumbnail_candidate=bool(data.get("is_thumbnail_candidate")),
+            label_method="manual",
         )
+        LabelRepository.mark_image_labeled(image_id=image_id, confidence=1.0, stage_status="completed", completed=True)
         return self._write_json({"ok": True})
 
     def _serve_dashboard_summary(self) -> None:
@@ -1262,6 +1289,52 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                 "publish_jobs": int(session.execute(select(func.count()).select_from(PublishJob)).scalar_one() or 0),
             }
         return self._write_json(payload)
+
+    def _serve_labeling_automation_snapshot(self) -> None:
+        snapshot = LabelRepository.get_label_automation_snapshot()
+        return self._write_json({
+            "contents_total": snapshot["contents_total"],
+            "contents_labeled": snapshot["contents_labeled"],
+            "contents_pending": snapshot["contents_pending"],
+            "images_total": snapshot["images_total"],
+            "images_labeled": snapshot["images_labeled"],
+            "images_pending": snapshot["images_pending"],
+            "total": snapshot["total"],
+            "completed": snapshot["completed"],
+            "completion_rate": round(float(snapshot["completion_rate"]), 2),
+            "last_content_labeled_at": _dt_to_iso(snapshot["last_content_labeled_at"]),
+            "last_image_labeled_at": _dt_to_iso(snapshot["last_image_labeled_at"]),
+            "avg_content_quality": round(float(snapshot["avg_content_quality"]), 2),
+            "avg_image_quality": round(float(snapshot["avg_image_quality"]), 2),
+            "content_method_breakdown": snapshot.get("content_method_breakdown", {}),
+            "image_method_breakdown": snapshot.get("image_method_breakdown", {}),
+            "free_api_daily_limit": int(snapshot.get("free_api_daily_limit", 200)),
+            "paid_api_daily_limit": int(snapshot.get("paid_api_daily_limit", 20)),
+            "free_api_used_today": int(snapshot.get("free_api_used_today", 0)),
+            "paid_api_used_today": int(snapshot.get("paid_api_used_today", 0)),
+            "free_api_remaining_today": int(snapshot.get("free_api_remaining_today", 0)),
+            "paid_api_remaining_today": int(snapshot.get("paid_api_remaining_today", 0)),
+        })
+
+    def _serve_labeling_run_logs(self, limit: int = 50) -> None:
+        rows = LabelRepository.list_recent_run_logs(limit=limit)
+        return self._write_json(
+            [
+                {
+                    "id": int(row["id"]),
+                    "run_kind": row["run_kind"],
+                    "method": row["method"],
+                    "stage_summary": row["stage_summary"],
+                    "labeled_count": int(row["labeled_count"]),
+                    "target_count": int(row["target_count"]),
+                    "free_api_used": int(row["free_api_used"]),
+                    "paid_api_used": int(row["paid_api_used"]),
+                    "message": row["message"],
+                    "created_at": _dt_to_iso(row["created_at"]),
+                }
+                for row in rows
+            ]
+        )
 
     def _serve_personas(self) -> None:
         rows = PersonaRepository.list_all()
@@ -1527,11 +1600,23 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         })
 
     def _serve_v2_label_settings(self) -> None:
+        snapshot = LabelRepository.get_label_automation_snapshot()
         return self._write_json({
             "method": AppSettingRepository.get_value(LabelSettingKeys.METHOD, "rule"),
             "batch_size": _to_int(AppSettingRepository.get_value(LabelSettingKeys.BATCH_SIZE, "300")) or 300,
             "quality_threshold": _to_int(AppSettingRepository.get_value(LabelSettingKeys.QUALITY_THRESHOLD, "3")) or 3,
             "relabel_policy": AppSettingRepository.get_value(LabelSettingKeys.RELABEL_POLICY, "skip"),
+            "auto_enabled": _to_bool(AppSettingRepository.get_value(LabelSettingKeys.AUTO_ENABLED, "0")),
+            "interval_minutes": _to_int(AppSettingRepository.get_value(LabelSettingKeys.INTERVAL_MINUTES, "15")) or 15,
+            "free_api_daily_limit": _to_int(AppSettingRepository.get_value(LabelSettingKeys.FREE_API_DAILY_LIMIT, "200")) or 200,
+            "paid_api_daily_limit": _to_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_API_DAILY_LIMIT, "20")) or 20,
+            "threshold_mid": _to_int(AppSettingRepository.get_value(LabelSettingKeys.THRESHOLD_MID, "3")) or 3,
+            "threshold_high": _to_int(AppSettingRepository.get_value(LabelSettingKeys.THRESHOLD_HIGH, "4")) or 4,
+            "auto_status": labeling_auto_scheduler.status(),
+            "free_api_used_today": int(snapshot.get("free_api_used_today", 0)),
+            "paid_api_used_today": int(snapshot.get("paid_api_used_today", 0)),
+            "free_api_remaining_today": int(snapshot.get("free_api_remaining_today", 0)),
+            "paid_api_remaining_today": int(snapshot.get("paid_api_remaining_today", 0)),
         })
 
     def _serve_v2_writer_settings(self) -> None:
@@ -2269,6 +2354,14 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         AppSettingRepository.set_value(LabelSettingKeys.BATCH_SIZE, str(max(10, min(1000, _to_int(data.get("batch_size")) or 300))))
         AppSettingRepository.set_value(LabelSettingKeys.QUALITY_THRESHOLD, str(max(1, min(5, _to_int(data.get("quality_threshold")) or 3))))
         AppSettingRepository.set_value(LabelSettingKeys.RELABEL_POLICY, str(data.get("relabel_policy") or "skip"))
+        AppSettingRepository.set_value(LabelSettingKeys.AUTO_ENABLED, "1" if _to_bool(data.get("auto_enabled")) else "0")
+        AppSettingRepository.set_value(LabelSettingKeys.INTERVAL_MINUTES, str(max(5, min(1440, _to_int(data.get("interval_minutes")) or 15))))
+        AppSettingRepository.set_value(LabelSettingKeys.FREE_API_DAILY_LIMIT, str(max(0, min(100000, _to_int(data.get("free_api_daily_limit")) or 200))))
+        AppSettingRepository.set_value(LabelSettingKeys.PAID_API_DAILY_LIMIT, str(max(0, min(100000, _to_int(data.get("paid_api_daily_limit")) or 20))))
+        threshold_mid = max(1, min(5, _to_int(data.get("threshold_mid")) or 3))
+        threshold_high = max(threshold_mid, min(5, _to_int(data.get("threshold_high")) or 4))
+        AppSettingRepository.set_value(LabelSettingKeys.THRESHOLD_MID, str(threshold_mid))
+        AppSettingRepository.set_value(LabelSettingKeys.THRESHOLD_HIGH, str(threshold_high))
         return self._write_json({"ok": True})
 
     def _save_v2_writer_settings(self) -> None:
@@ -2428,7 +2521,7 @@ class WebShellPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._current_section = "keyword"
+        self._current_section = "dashboard"
         self._current_node: str | None = None
 
         layout = QHBoxLayout()
@@ -2452,7 +2545,7 @@ class WebShellPage(QWidget):
         self._view.setUrl(QUrl(f"{server.base_url}/index.html?section={section}{suffix}&embed=desktop"))
 
     def open_section(self, section: str, node_id: str | None = None) -> None:
-        normalized = (section or "keyword").strip().lower() or "keyword"
+        normalized = (section or "dashboard").strip().lower() or "dashboard"
         self._current_section = normalized
         self._current_node = (node_id or "").strip() or None
         if hasattr(self, "_view"):

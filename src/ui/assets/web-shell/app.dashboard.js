@@ -12,6 +12,7 @@
 
     function renderAutomationStatus(status) {
       const collect = status?.collect || {};
+      const labeling = status?.labeling || {};
       const writer = status?.writer || {};
       const publish = status?.publish || {};
       const writerChannels = Array.isArray(writer.channels) ? writer.channels : [];
@@ -24,6 +25,7 @@
         : "";
 
       const collectErr = String(collect.last_error || "").trim();
+      const labelingErr = String(labeling.last_error || "").trim();
       const writerErr = String(writer.last_error || "").trim();
       const publishLogs = Array.isArray(publish.logs) ? publish.logs : [];
       const publishErr = [...publishLogs].reverse().find((line) => /(실패|오류|error)/i.test(String(line || ""))) || "";
@@ -34,6 +36,9 @@
       const writerState = writerErr
         ? "error"
         : (writer.running ? "running" : (writer.worker_started ? "waiting" : "stopped"));
+      const labelingState = labelingErr
+        ? "error"
+        : (labeling.running ? "running" : (labeling.auto_enabled ? "waiting" : "stopped"));
       const publishState = publishErr
         ? "error"
         : (publish.enabled ? (publish.pause_until ? "waiting" : "running") : "stopped");
@@ -74,6 +79,7 @@
       };
 
       setBadge("#collectAutoBadge", "수집 자동", collectState, collectState === "waiting" ? `${collect.interval_minutes || "-"}분` : "");
+      setBadge("#labelAutoBadge", "라벨 자동", labelingState, labelingState === "waiting" ? `${labeling.interval_minutes || "-"}분` : "");
       setBadge("#writerAutoBadge", "작성 자동", writerState, writerState === "waiting" ? `${writer.auto_channel_count || 0}채널` : "");
       setBadge("#publishAutoBadge", "발행 자동", publishState, publish.pause_until ? fmt(publish.pause_until) : "");
 
@@ -106,6 +112,12 @@
         `다음 실행 ${fmt(writerNextRun)}`,
         `최근 처리 ${Number(writer.last_tick_processed || 0)}건`,
         writerErr ? `오류: ${writerErr}` : "",
+      ]);
+
+      setHint("#labelingAutoStatusHint", "자동 라벨링 상태", labelingState, [
+        `다음 실행 ${fmt(labeling.next_run_at)}`,
+        `최근 처리 텍스트 ${Number(labeling.last_content_processed || 0)}건 / 이미지 ${Number(labeling.last_image_processed || 0)}건`,
+        labelingErr ? `오류: ${labelingErr}` : "",
       ]);
 
       setHint("#publishAutoStatusHint", "자동 발행 상태", publishState, [
@@ -242,14 +254,30 @@
       dashboardApplyControlValues();
       const autoWrap = qs("#dashboardAutoGrid");
       const opsWrap = qs("#dashboardOpsGrid");
+      const labelingWrap = qs("#dashboardLabelingGrid");
+      const labelingHint = qs("#dashboardLabelingHint");
       const resourceWrap = qs("#dashboardResourceGrid");
       const hint = qs("#dashboardHint");
-      if (!autoWrap || !opsWrap || !resourceWrap) return;
+      if (!autoWrap || !opsWrap || !resourceWrap || !labelingWrap) return;
 
-      const [summaryRes, collectJobsRes, labelStatsRes, writerRes, publishAutoRes, monitorRes, collectStatusRes, writerStatusRes, automationRes] = await Promise.all([
+      const [
+        summaryRes,
+        collectJobsRes,
+        labelStatsRes,
+        labelSnapshotRes,
+        labelSettingRes,
+        writerRes,
+        publishAutoRes,
+        monitorRes,
+        collectStatusRes,
+        writerStatusRes,
+        automationRes,
+      ] = await Promise.all([
         safeRequest("/api/dashboard/summary"),
         safeRequest("/api/collect/jobs"),
         safeRequest("/api/labeling/stats"),
+        safeRequest("/api/labeling/automation-snapshot"),
+        safeRequest("/api/v2/settings/label"),
         safeRequest("/api/writer/run-summary"),
         safeRequest("/api/publish/auto/status"),
         safeRequest("/api/v2/monitor/events?limit=200"),
@@ -261,6 +289,8 @@
       const summary = summaryRes.ok && summaryRes.data && typeof summaryRes.data === "object" ? summaryRes.data : {};
       const collectJobs = Array.isArray(collectJobsRes.data) ? collectJobsRes.data : [];
       const labelStats = labelStatsRes.ok && labelStatsRes.data && typeof labelStatsRes.data === "object" ? labelStatsRes.data : {};
+      const labelSnapshot = labelSnapshotRes.ok && labelSnapshotRes.data && typeof labelSnapshotRes.data === "object" ? labelSnapshotRes.data : {};
+      const labelSetting = labelSettingRes.ok && labelSettingRes.data && typeof labelSettingRes.data === "object" ? labelSettingRes.data : {};
       const writerSummary = writerRes.ok && writerRes.data && typeof writerRes.data === "object" ? writerRes.data : {};
       const publishAuto = publishAutoRes.ok && publishAutoRes.data && typeof publishAutoRes.data === "object" ? publishAutoRes.data : {};
       const monitorItems = Array.isArray(monitorRes?.data?.items) ? monitorRes.data.items : [];
@@ -269,6 +299,7 @@
       const automation = automationRes.ok && automationRes.data && typeof automationRes.data === "object" ? automationRes.data : {};
       if (automationRes.ok) renderAutomationStatus(automation);
       const collectAuto = automation.collect || {};
+      const labelingAuto = automation.labeling || {};
       const writerAuto = automation.writer || {};
       const publishAutoUnified = automation.publish || publishAuto;
 
@@ -295,6 +326,7 @@
       const labelTotal = labelContentTotal + labelImageTotal;
       const labelDone = Number(labelStats.contents_labeled || 0) + Number(labelStats.images_labeled || 0);
       const labelCompletion = labelTotal ? (labelDone / labelTotal) * 100 : 100;
+      const labelPending = Number(labelSnapshot.contents_pending || 0) + Number(labelSnapshot.images_pending || 0);
 
       const writerChannels = Array.isArray(writerSummary.channels) ? writerSummary.channels : [];
       const writerTotal = writerChannels.length;
@@ -329,6 +361,9 @@
       const writerAutoState = writerDashboardErr
         ? "error"
         : (writerStatus.running ? "running" : (writerAuto.worker_started ? "waiting" : "stopped"));
+      const labelingAutoState = String(labelingAuto.last_error || "").trim()
+        ? "error"
+        : (labelingAuto.running ? "running" : (labelingAuto.auto_enabled ? "waiting" : "stopped"));
       const publishAutoState = publishDashboardErr
         ? "error"
         : (publishAutoUnified.enabled ? (publishAutoUnified.pause_until ? "waiting" : "running") : "stopped");
@@ -355,6 +390,17 @@
               : `자동채널: ${writerAuto.auto_channel_count || 0}개 / 최근처리: ${writerAuto.last_tick_processed || 0}건`),
           node: "writer.run",
           warn: !!writerStatus.stop_requested || !!writerDashboardErr,
+        },
+        {
+          title: "라벨 실행 상태",
+          value: labelingAutoState === "running" ? "즉시실행중" : (labelingAutoState === "waiting" ? "자동대기" : (labelingAutoState === "error" ? "오류발생" : "자동중지")),
+          state: labelingAutoState,
+          stateLabel: labelingAutoState === "running" ? "실행중" : (labelingAutoState === "waiting" ? "대기중" : (labelingAutoState === "error" ? "오류" : "중지")),
+          sub: labelingAuto.last_error
+            ? `오류: ${labelingAuto.last_error}`
+            : `주기 ${Number(labelingAuto.interval_minutes || 15)}분 / 최근 처리 ${Number(labelingAuto.last_content_processed || 0)}+${Number(labelingAuto.last_image_processed || 0)}건`,
+          node: "label.run",
+          warn: !labelingAuto.auto_enabled || !!labelingAuto.last_error,
         },
         {
           title: "자동 발행 상태",
@@ -427,7 +473,7 @@
       statusCards.forEach((card, idx) => {
         const div = document.createElement("button");
         div.type = "button";
-        div.className = `card-metric dashboard-clickable dashboard-auto-card tone-${idx + 1}`;
+        div.className = `card-metric dashboard-clickable dashboard-auto-card tone-${(idx % 3) + 1}`;
         div.classList.add(`state-${card.state || "stopped"}`);
         if (card.warn) div.classList.add("warn");
         if (card.value === "ERR") div.classList.add("fail");
@@ -460,6 +506,57 @@
         opsWrap.appendChild(div);
       });
 
+      const labelingCards = [
+        {
+          title: "대기 큐",
+          value: `${labelPending}건`,
+          sub: `텍스트 ${Number(labelSnapshot.contents_pending || 0)} / 이미지 ${Number(labelSnapshot.images_pending || 0)}`,
+          node: "label.run",
+          warn: labelPending > Number(labelSetting.batch_size || 300),
+        },
+        {
+          title: "완료율",
+          value: `${Number(labelSnapshot.completion_rate || labelCompletion).toFixed(1)}%`,
+          sub: `완료 ${Number(labelSnapshot.completed || labelDone)}/${Number(labelSnapshot.total || labelTotal)}`,
+          node: "label.results",
+          warn: Number(labelSnapshot.completion_rate || labelCompletion) < 95,
+        },
+        {
+          title: "자동화 설정",
+          value: String(labelSetting.method || "rule").toUpperCase(),
+          sub: `배치 ${Number(labelSetting.batch_size || 300)} | 품질 ${Number(labelSetting.quality_threshold || 3)} | Free 잔여 ${Number(labelSnapshot.free_api_remaining_today || 0)} | Paid 잔여 ${Number(labelSnapshot.paid_api_remaining_today || 0)}`,
+          node: "label.settings",
+          warn: false,
+        },
+        {
+          title: "최근 처리",
+          value: fmt(labelSnapshot.last_content_labeled_at || labelSnapshot.last_image_labeled_at),
+          sub: `평균 품질 텍스트 ${Number(labelSnapshot.avg_content_quality || 0).toFixed(1)} / 이미지 ${Number(labelSnapshot.avg_image_quality || 0).toFixed(1)} | route rule ${Number((labelSnapshot.content_method_breakdown || {}).rule || 0) + Number((labelSnapshot.image_method_breakdown || {}).rule || 0)} / free ${Number((labelSnapshot.content_method_breakdown || {}).free_api || 0) + Number((labelSnapshot.image_method_breakdown || {}).free_api || 0)} / paid ${Number((labelSnapshot.content_method_breakdown || {}).paid_api || 0) + Number((labelSnapshot.image_method_breakdown || {}).paid_api || 0)}`,
+          node: "label.run",
+          warn: !labelSnapshot.last_content_labeled_at && !labelSnapshot.last_image_labeled_at,
+        },
+      ];
+
+      labelingWrap.innerHTML = "";
+      labelingCards.forEach((card) => {
+        const div = document.createElement("button");
+        div.type = "button";
+        div.className = "card-metric dashboard-clickable dashboard-label-card";
+        if (card.warn) div.classList.add("warn");
+        div.innerHTML = `
+          <div class='metric-key'>${card.title}</div>
+          <div class='metric-val'>${card.value || "-"}</div>
+          <div class='metric-sub'>${card.sub || "-"}</div>
+        `;
+        div.addEventListener("click", () => navigateToNode(card.node));
+        labelingWrap.appendChild(div);
+      });
+      if (labelingHint) {
+        labelingHint.textContent = labelSnapshotRes.ok && labelSettingRes.ok
+          ? `라벨링 방식 ${String(labelSetting.method || "rule")} | 다음 실행은 라벨링 실행 메뉴에서 즉시 트리거 가능합니다.`
+          : "라벨링 자동화 지표 일부를 불러오지 못했습니다.";
+      }
+
       resourceWrap.innerHTML = "";
       countCards.forEach((card) => {
         const div = document.createElement("button");
@@ -480,6 +577,8 @@
         summaryRes.ok ? null : "dashboard/summary",
         collectJobsRes.ok ? null : "collect/jobs",
         labelStatsRes.ok ? null : "labeling/stats",
+        labelSnapshotRes.ok ? null : "labeling/automation-snapshot",
+        labelSettingRes.ok ? null : "v2/settings/label",
         writerRes.ok ? null : "writer/run-summary",
         publishAutoRes.ok ? null : "publish/auto/status",
         monitorRes.ok ? null : "v2/monitor/events",

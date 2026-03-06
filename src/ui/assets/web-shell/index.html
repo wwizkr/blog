@@ -5,18 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BlogWriter 메뉴</title>
   <link rel="stylesheet" href="/assets/mublo-editor/MubloEditor.css?v=20260301c" />
-  <link rel="stylesheet" href="/assets/web-shell/style.css?v=20260301c" />
+  <link rel="stylesheet" href="/assets/web-shell/style.css?v=20260306d" />
 </head>
 <body>
   <div class="app">
     <header class="topbar">
-      <div id="sectionTitle" class="brand">키워드 관리</div>
+      <div id="sectionTitle" class="brand">대시보드</div>
       <div class="right-tools">
         <span id="collectAutoBadge" class="badge">수집 자동: -</span>
+        <span id="labelAutoBadge" class="badge">라벨 자동: -</span>
         <span id="writerAutoBadge" class="badge">작성 자동: -</span>
         <span id="publishAutoBadge" class="badge">발행 자동: -</span>
         <span id="relatedLimitBadge" class="badge">현재 상한: -</span>
-        <button id="themeToggle" class="btn">Theme</button>
+        <button id="themeToggle" class="btn" title="테마 전환" aria-label="테마 전환">🌙</button>
       </div>
     </header>
 
@@ -44,6 +45,11 @@
         <section class="dashboard-block">
           <div class="dashboard-block-head">운영 지표</div>
           <div id="dashboardOpsGrid" class="grid-cards"></div>
+        </section>
+        <section class="dashboard-block">
+          <div class="dashboard-block-head">라벨링 자동화</div>
+          <p id="dashboardLabelingHint" class="hint">-</p>
+          <div id="dashboardLabelingGrid" class="grid-cards dashboard-labeling-grid"></div>
         </section>
         <section class="dashboard-block">
           <div class="dashboard-block-head">자원 현황</div>
@@ -160,7 +166,7 @@
             <table id="collectedContentTable">
               <thead>
                 <tr>
-                  <th>ID</th><th>제목</th><th>키워드</th><th>채널</th><th>수집일시</th><th>작업</th>
+                  <th>ID</th><th>제목</th><th>키워드</th><th>채널</th><th>라벨상태</th><th>수집일시</th><th>작업</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -176,6 +182,7 @@
       </section>
       <section id="labelingSection" class="panel hidden">
         <div class="panel-head"><h2>라벨링 실행</h2><button id="labelingRefreshBtn" class="btn">새로고침</button></div>
+        <p id="labelingAutoStatusHint" class="hint">자동 라벨링 상태: -</p>
         <p id="labelingStats" class="hint">-</p>
         <p id="labelingQueueHint" class="hint">-</p>
         <div class="form-row"><button id="runContentLabelingBtn" class="btn">미라벨링 텍스트 라벨링</button><button id="runImageLabelingBtn" class="btn">미라벨링 이미지 라벨링</button><button id="retryFailedLabelingBtn" class="btn ghost" disabled>실패 재시도</button></div>
@@ -491,10 +498,22 @@
           <label>배치 크기</label><input id="labelSettingBatch" type="number" min="10" max="1000" value="300"/>
           <label>품질 임계값</label><input id="labelSettingQuality" type="number" min="1" max="5" value="3"/>
           <label>재라벨링 정책</label><select id="labelSettingPolicy"><option value="skip">skip</option><option value="overwrite">overwrite</option></select>
+        </div>
+        <div class="form-row">
+          <label><input id="labelSettingAutoEnabled" type="checkbox"/> 자동 실행</label>
+          <label>자동 주기(분)</label><input id="labelSettingInterval" type="number" min="5" max="1440" value="15"/>
+          <label>Free API 일일 한도</label><input id="labelSettingFreeLimit" type="number" min="0" max="100000" value="200"/>
+          <label>Paid API 일일 한도</label><input id="labelSettingPaidLimit" type="number" min="0" max="100000" value="20"/>
+        </div>
+        <div class="form-row">
+          <label>중간 임계값</label><input id="labelSettingThresholdMid" type="number" min="1" max="5" value="3"/>
+          <label>높음 임계값</label><input id="labelSettingThresholdHigh" type="number" min="1" max="5" value="4"/>
+          <button id="labelSettingTickBtn" class="btn ghost">자동 라벨링 1회 실행</button>
           <button id="labelSettingSaveBtn" class="btn">저장</button>
         </div>
         <p id="labelSettingModeHint" class="hint">-</p>
         <p id="labelSettingQualityHint" class="hint">-</p>
+        <p id="labelSettingAutoHint" class="hint">-</p>
       </section>
 
       <section id="writerSettingsSection" class="panel hidden">
@@ -636,6 +655,9 @@
         </div>
         <p id="monitorHint" class="hint">-</p>
         <p id="monitorGroupHint" class="hint">-</p>
+        <p id="monitorLabelStatusHintTotal" class="hint">-</p>
+        <p id="monitorLabelStatusHintContent" class="hint">-</p>
+        <p id="monitorLabelStatusHintImage" class="hint">-</p>
         <div class="table-wrap"><table id="monitorTable"><thead><tr><th>단계</th><th>레벨</th><th>상태</th><th>메시지</th><th>시각</th><th>동작</th></tr></thead><tbody></tbody></table></div>
         <div class="form-row tight">
           <button id="monitorPrevPageBtn" class="btn ghost">이전 페이지</button>
@@ -717,23 +739,23 @@
   <script src="/assets/mublo-editor/MubloEditor.js?v=20260301c"></script>
   <script>if (typeof window.MubloEditor === "undefined" && typeof MubloEditor !== "undefined") { window.MubloEditor = MubloEditor; }</script>
   <script src="/assets/web-shell/app.config.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.dialog.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.dialog.js?v=20260306b"></script>
   <script src="/assets/web-shell/app.common.js?v=20260302a"></script>
   <script src="/assets/web-shell/app.native-select.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.shell.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.shell.js?v=20260306b"></script>
   <script src="/assets/web-shell/app.collection-ui.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.dashboard.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.labeling.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.dashboard.js?v=20260306a"></script>
+  <script src="/assets/web-shell/app.labeling.js?v=20260306a"></script>
   <script src="/assets/web-shell/app.collect-settings.js?v=20260302a"></script>
   <script src="/assets/web-shell/app.collection-run.js?v=20260302a"></script>
   <script src="/assets/web-shell/app.manage.js?v=20260302a"></script>
   <script src="/assets/web-shell/app.writer-channel.js?v=20260302a"></script>
   <script src="/assets/web-shell/app.publish-settings.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.monitor.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.monitor.js?v=20260306a"></script>
   <script src="/assets/web-shell/app.publisher.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.collected-data.js?v=20260302a"></script>
+  <script src="/assets/web-shell/app.collected-data.js?v=20260306a"></script>
   <script src="/assets/web-shell/app.writer-run.js?v=20260302a"></script>
-  <script src="/assets/web-shell/app.js?v=20260302b"></script>
+  <script src="/assets/web-shell/app.js?v=20260306e"></script>
 </body>
 </html>
 

@@ -14,11 +14,19 @@
     }
 
     function labelSettingDraft() {
+      const thresholdMid = clampInt(qs("#labelSettingThresholdMid")?.value || 3, 1, 5, 3);
+      const thresholdHighRaw = clampInt(qs("#labelSettingThresholdHigh")?.value || 4, 1, 5, 4);
       return {
         method: String(qs("#labelSettingMethod")?.value || "rule"),
         batch_size: clampInt(qs("#labelSettingBatch")?.value || 300, 10, 1000, 300),
         quality_threshold: clampInt(qs("#labelSettingQuality")?.value || 3, 1, 5, 3),
         relabel_policy: String(qs("#labelSettingPolicy")?.value || "skip"),
+        auto_enabled: !!qs("#labelSettingAutoEnabled")?.checked,
+        interval_minutes: clampInt(qs("#labelSettingInterval")?.value || 15, 5, 1440, 15),
+        free_api_daily_limit: clampInt(qs("#labelSettingFreeLimit")?.value || 200, 0, 100000, 200),
+        paid_api_daily_limit: clampInt(qs("#labelSettingPaidLimit")?.value || 20, 0, 100000, 20),
+        threshold_mid: thresholdMid,
+        threshold_high: Math.max(thresholdMid, thresholdHighRaw),
       };
     }
 
@@ -32,10 +40,23 @@
     }
 
     function applyLabelSettingToForm(payload) {
+      const batchSize = Number.isFinite(Number(payload.batch_size)) ? Number(payload.batch_size) : 300;
+      const qualityThreshold = Number.isFinite(Number(payload.quality_threshold)) ? Number(payload.quality_threshold) : 3;
+      const intervalMinutes = Number.isFinite(Number(payload.interval_minutes)) ? Number(payload.interval_minutes) : 15;
+      const freeLimit = Number.isFinite(Number(payload.free_api_daily_limit)) ? Number(payload.free_api_daily_limit) : 200;
+      const paidLimit = Number.isFinite(Number(payload.paid_api_daily_limit)) ? Number(payload.paid_api_daily_limit) : 20;
+      const thresholdMid = Number.isFinite(Number(payload.threshold_mid)) ? Number(payload.threshold_mid) : 3;
+      const thresholdHigh = Number.isFinite(Number(payload.threshold_high)) ? Number(payload.threshold_high) : 4;
       if (qs("#labelSettingMethod")) qs("#labelSettingMethod").value = payload.method || "rule";
-      if (qs("#labelSettingBatch")) qs("#labelSettingBatch").value = String(payload.batch_size || 300);
-      if (qs("#labelSettingQuality")) qs("#labelSettingQuality").value = String(payload.quality_threshold || 3);
+      if (qs("#labelSettingBatch")) qs("#labelSettingBatch").value = String(batchSize);
+      if (qs("#labelSettingQuality")) qs("#labelSettingQuality").value = String(qualityThreshold);
       if (qs("#labelSettingPolicy")) qs("#labelSettingPolicy").value = payload.relabel_policy || "skip";
+      if (qs("#labelSettingAutoEnabled")) qs("#labelSettingAutoEnabled").checked = !!payload.auto_enabled;
+      if (qs("#labelSettingInterval")) qs("#labelSettingInterval").value = String(intervalMinutes);
+      if (qs("#labelSettingFreeLimit")) qs("#labelSettingFreeLimit").value = String(freeLimit);
+      if (qs("#labelSettingPaidLimit")) qs("#labelSettingPaidLimit").value = String(paidLimit);
+      if (qs("#labelSettingThresholdMid")) qs("#labelSettingThresholdMid").value = String(thresholdMid);
+      if (qs("#labelSettingThresholdHigh")) qs("#labelSettingThresholdHigh").value = String(thresholdHigh);
       syncLabelSettingModeUi();
     }
 
@@ -52,7 +73,8 @@
     async function refreshLabelSettingHints(stats) {
       const hintMode = qs("#labelSettingModeHint");
       const hintQuality = qs("#labelSettingQualityHint");
-      if (!hintMode && !hintQuality) return;
+      const hintAuto = qs("#labelSettingAutoHint");
+      if (!hintMode && !hintQuality && !hintAuto) return;
       const cfg = labelSettingDraft();
       const modeText = cfg.method === "ai"
         ? "AI 방식: 고품질 라벨링, 처리속도/비용 영향이 큽니다."
@@ -66,7 +88,13 @@
       }
 
       const stat = stats || await safeRequest("/api/labeling/stats");
+      const [autoStatusRes, settingRes] = await Promise.all([
+        safeRequest("/api/labeling/auto/status"),
+        safeRequest("/api/v2/settings/label"),
+      ]);
       const data = stat && stat.ok ? (stat.data || {}) : {};
+      const auto = autoStatusRes && autoStatusRes.ok ? (autoStatusRes.data || {}) : {};
+      const setting = settingRes && settingRes.ok ? (settingRes.data || {}) : {};
       const contentTotal = Number(data.contents_total || 0);
       const contentLabeled = Number(data.contents_labeled || 0);
       const imageTotal = Number(data.images_total || 0);
@@ -79,6 +107,29 @@
           ? "완화: 처리량 증가, 품질 편차 증가"
           : "균형: 처리량/품질 균형";
       if (hintQuality) hintQuality.textContent = `품질 임계값 ${cfg.quality_threshold} (${impact}) | 예상 남은 배치 ${batchNeed}회`;
+      if (hintAuto) {
+        const autoMode = cfg.auto_enabled ? "ON" : "OFF";
+        hintAuto.textContent = `자동 실행 ${autoMode} | 주기 ${cfg.interval_minutes}분 | 다음 실행 ${auto.next_run_at || "-"} | 최근 처리 텍스트 ${Number(auto.last_content_processed || 0)} / 이미지 ${Number(auto.last_image_processed || 0)} | Free ${Number(setting.free_api_used_today || 0)}/${Number(setting.free_api_daily_limit || cfg.free_api_daily_limit)} | Paid ${Number(setting.paid_api_used_today || 0)}/${Number(setting.paid_api_daily_limit || cfg.paid_api_daily_limit)}`;
+      }
+    }
+
+    async function refreshLabelingRunLogs() {
+      const tbody = qs("#labelingLogTable tbody");
+      if (!tbody) return;
+      const res = await safeRequest("/api/labeling/runs?limit=30");
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      tbody.innerHTML = rows.length ? "" : "<tr><td>실행 이력 없음</td></tr>";
+      rows.forEach((row) => {
+        const tr = document.createElement("tr");
+        const stage = row.stage_summary && typeof row.stage_summary === "object" ? row.stage_summary : {};
+        const stageText = [
+          `rule:${Number(stage.rule_done || 0)}`,
+          `free:${Number(stage.free_api_done || 0)}`,
+          `paid:${Number(stage.paid_api_done || 0)}`,
+        ].join(" / ");
+        tr.innerHTML = `<td>[${row.created_at || "-"}] ${row.run_kind || "-"} ${row.method || "-"} | ${Number(row.labeled_count || 0)}/${Number(row.target_count || 0)} | quota free+${Number(row.free_api_used || 0)} paid+${Number(row.paid_api_used || 0)} | ${stageText} | ${row.message || "-"}</td>`;
+        tbody.appendChild(tr);
+      });
     }
 
     async function refreshLabelingSection() {
@@ -109,6 +160,7 @@
       }
       updateRetryLabelingButton();
       await refreshLabelSettingHints({ ok: true, data: s });
+      await refreshLabelingRunLogs();
     }
 
     function stopLabelingPolling() {
@@ -168,6 +220,12 @@
         batch_size: s.batch_size || 300,
         quality_threshold: s.quality_threshold || 3,
         relabel_policy: s.relabel_policy || "skip",
+        auto_enabled: !!s.auto_enabled,
+        interval_minutes: s.interval_minutes || 15,
+        free_api_daily_limit: s.free_api_daily_limit || 200,
+        paid_api_daily_limit: s.paid_api_daily_limit || 20,
+        threshold_mid: s.threshold_mid || 3,
+        threshold_high: s.threshold_high || 4,
       });
       const presetNode = qs("#labelSettingPreset");
       if (presetNode) {
@@ -192,6 +250,13 @@
         body: JSON.stringify(payload),
       });
       await refreshLabelingSection();
+      await refreshLabelSettingsSection();
+    }
+
+    async function tickAutoLabeling() {
+      await request("/api/labeling/auto/tick", { method: "POST", body: "{}" });
+      await refreshLabelingSection();
+      await refreshLabelSettingHints();
     }
 
     return {
@@ -200,14 +265,16 @@
       applyLabelSettingToForm,
       syncLabelSettingModeUi,
       updateRetryLabelingButton,
-      refreshLabelSettingHints,
-      refreshLabelingSection,
+        refreshLabelSettingHints,
+        refreshLabelingRunLogs,
+        refreshLabelingSection,
       stopLabelingPolling,
       startLabelingPolling,
       runLabelingStage,
       retryFailedLabelingRun,
       refreshLabelSettingsSection,
       saveLabelSettingsSection,
+      tickAutoLabeling,
     };
   }
 

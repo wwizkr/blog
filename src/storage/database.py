@@ -64,6 +64,7 @@ def init_database() -> None:
     _ensure_personas_columns()
     _ensure_keywords_columns()
     _ensure_related_keyword_tables()
+    _ensure_labeling_columns()
     _sync_channels_from_collectors()
     _seed_publish_channels()
     _seed_publish_channel_settings()
@@ -71,6 +72,36 @@ def init_database() -> None:
     _seed_personas()
     _seed_article_templates()
     _seed_ai_providers()
+
+
+def _ensure_labeling_columns() -> None:
+    content_columns = {
+        "label_status": "VARCHAR(20) DEFAULT 'pending'",
+        "label_attempt_count": "INTEGER DEFAULT 0",
+        "last_labeled_at": "DATETIME",
+        "label_confidence": "INTEGER",
+    }
+    image_columns = {
+        "label_status": "VARCHAR(20) DEFAULT 'pending'",
+        "label_attempt_count": "INTEGER DEFAULT 0",
+        "last_labeled_at": "DATETIME",
+        "label_confidence": "INTEGER",
+    }
+    with get_engine().begin() as conn:
+        content_existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(raw_contents)").fetchall()}
+        for column_name, column_type in content_columns.items():
+            if column_name in content_existing:
+                continue
+            conn.exec_driver_sql(f"ALTER TABLE raw_contents ADD COLUMN {column_name} {column_type}")
+
+        image_existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(raw_images)").fetchall()}
+        for column_name, column_type in image_columns.items():
+            if column_name in image_existing:
+                continue
+            conn.exec_driver_sql(f"ALTER TABLE raw_images ADD COLUMN {column_name} {column_type}")
+
+        conn.exec_driver_sql("UPDATE raw_contents SET label_status = 'pending' WHERE label_status IS NULL OR TRIM(label_status) = ''")
+        conn.exec_driver_sql("UPDATE raw_images SET label_status = 'pending' WHERE label_status IS NULL OR TRIM(label_status) = ''")
 
 
 def _ensure_generated_articles_columns() -> None:

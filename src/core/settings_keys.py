@@ -24,6 +24,15 @@ class LabelSettingKeys:
     BATCH_SIZE = "label.batch_size"
     QUALITY_THRESHOLD = "label.quality_threshold"
     RELABEL_POLICY = "label.relabel_policy"
+    AUTO_ENABLED = "label.auto_enabled"
+    INTERVAL_MINUTES = "label.interval_minutes"
+    FREE_API_DAILY_LIMIT = "label.free_api_daily_limit"
+    PAID_API_DAILY_LIMIT = "label.paid_api_daily_limit"
+    THRESHOLD_MID = "label.threshold_mid"
+    THRESHOLD_HIGH = "label.threshold_high"
+    QUOTA_DATE = "label.quota_date"
+    FREE_API_USED = "label.free_api_used"
+    PAID_API_USED = "label.paid_api_used"
 
 
 class WriterSettingKeys:

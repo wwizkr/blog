@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import partial
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
         self._group_bodies: dict[str, QWidget] = {}
         self._init_size()
         self._build_ui()
-        self._open_node("keyword")
+        self._open_node("dashboard")
 
     def _init_size(self) -> None:
         screen = self.screen()
@@ -127,10 +128,25 @@ class MainWindow(QMainWindow):
 
             head = QPushButton(primary_label)
             head.setMinimumHeight(36)
+            head.setCursor(Qt.PointingHandCursor)
+            head.setAttribute(Qt.WA_Hover, True)
             head.setStyleSheet(
                 """
-                QPushButton { background-color: transparent; border: 0; border-bottom: 1px solid #374151; text-align: left; padding-left: 12px; color: #e5eefc; font-weight: 600; }
-                QPushButton:hover { background-color: #273449; }
+                QPushButton {
+                    background-color: transparent;
+                    border: 0;
+                    border-bottom: 1px solid #374151;
+                    text-align: left;
+                    padding-left: 12px;
+                    color: #e5eefc;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #435b79;
+                    color: #ffffff;
+                    border-bottom: 1px solid #9db7d8;
+                }
+                QPushButton:pressed { background-color: #2f435b; }
                 """
             )
             if children:
@@ -150,10 +166,24 @@ class MainWindow(QMainWindow):
                     label = str(child.get("label") or node_id)
                     btn = QPushButton(label)
                     btn.setMinimumHeight(32)
+                    btn.setCursor(Qt.PointingHandCursor)
+                    btn.setAttribute(Qt.WA_Hover, True)
                     btn.setStyleSheet(
                         """
-                        QPushButton { background-color: #334155; border: 1px solid #475569; border-radius: 6px; text-align: left; padding-left: 10px; color: #f8fafc; }
-                        QPushButton:hover { background-color: #3f536d; }
+                        QPushButton {
+                            background-color: #334155;
+                            border: 1px solid #475569;
+                            border-radius: 6px;
+                            text-align: left;
+                            padding-left: 10px;
+                            color: #f8fafc;
+                        }
+                        QPushButton:hover {
+                            background-color: #5b789b;
+                            border: 1px solid #b3cae6;
+                            color: #ffffff;
+                        }
+                        QPushButton:pressed { background-color: #405774; }
                         """
                     )
                     btn.clicked.connect(partial(self._open_node, node_id))
@@ -186,7 +216,7 @@ class MainWindow(QMainWindow):
             target.setVisible(True)
 
     def _open_node(self, node_id: str) -> None:
-        section = NODE_TO_SECTION.get(node_id, "keyword")
+        section = NODE_TO_SECTION.get(node_id, "dashboard")
         self._open_section(section=section, node_id=node_id)
         primary = (node_id or "").split(".")[0]
         if primary:

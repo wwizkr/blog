@@ -22,8 +22,8 @@
     }
 
     function readSection() {
-      const p = new URLSearchParams(location.search).get("section") || "keyword";
-      return sectionMap[p] ? p : "keyword";
+      const p = new URLSearchParams(location.search).get("section") || "dashboard";
+      return sectionMap[p] ? p : "dashboard";
     }
 
     function isDesktopEmbed() {
@@ -61,7 +61,7 @@
     }
 
     function navigateToNode(nodeId) {
-      const targetSection = menuNodeToSection[nodeId] || state.section || "keyword";
+      const targetSection = menuNodeToSection[nodeId] || state.section || "dashboard";
       const params = new URLSearchParams(location.search);
       params.set("section", targetSection);
       params.set("node", nodeId);

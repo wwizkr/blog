@@ -13,7 +13,7 @@
   const sectionToDefaultNode = cfg.sectionToDefaultNode || {};
 
   const state = {
-    section: "keyword",
+    section: "dashboard",
     categories: [],
     keywords: [],
     keywordPage: 1,
@@ -890,6 +890,7 @@
     retryFailedLabelingRun,
     refreshLabelSettingsSection,
     saveLabelSettingsSection,
+    tickAutoLabeling,
   } = labelingModule;
 
   const manageModule = window.createManageModule({
@@ -1487,13 +1488,60 @@
     renderWriterLogDashboard();
   }
 
+  function installImmediateCheckableBridge() {
+    const SKIP_KEY = "__instantChangeSkip";
+    const isCheckable = (node) => node instanceof HTMLInputElement && (node.type === "checkbox" || node.type === "radio");
+
+    document.addEventListener("input", (e) => {
+      const node = e.target;
+      if (!isCheckable(node)) return;
+      node.dataset[SKIP_KEY] = "1";
+      const instantChange = new Event("change", { bubbles: true });
+      instantChange.__instant = true;
+      node.dispatchEvent(instantChange);
+      window.setTimeout(() => {
+        if (node.dataset[SKIP_KEY] === "1") delete node.dataset[SKIP_KEY];
+      }, 250);
+    }, true);
+
+    document.addEventListener("change", (e) => {
+      const node = e.target;
+      if (!isCheckable(node)) return;
+      if (e.__instant) return;
+      if (node.dataset[SKIP_KEY] === "1") {
+        delete node.dataset[SKIP_KEY];
+        e.stopImmediatePropagation();
+      }
+    }, true);
+  }
+
+  function syncThemeToggleIcon(theme) {
+    const btn = qs("#themeToggle");
+    if (!btn) return;
+    const normalized = String(theme || "dark").toLowerCase() === "light" ? "light" : "dark";
+    if (normalized === "dark") {
+      btn.textContent = "🌙";
+      btn.title = "현재 다크모드 (클릭 시 라이트모드)";
+      btn.setAttribute("aria-label", "현재 다크모드 (클릭 시 라이트모드)");
+    } else {
+      btn.textContent = "☀";
+      btn.title = "현재 라이트모드 (클릭 시 다크모드)";
+      btn.setAttribute("aria-label", "현재 라이트모드 (클릭 시 다크모드)");
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", async () => {
-    applyTheme(getInitialTheme());
+    const initialTheme = getInitialTheme();
+    applyTheme(initialTheme);
+    syncThemeToggleIcon(initialTheme);
     if (isDesktopEmbed()) document.body.classList.add("embedded-desktop");
     setupNativeSelectProxies();
+    installImmediateCheckableBridge();
     qs("#themeToggle")?.addEventListener("click", () => {
       const current = document.documentElement.getAttribute("data-theme") || "light";
-      applyTheme(current === "light" ? "dark" : "light");
+      const next = current === "light" ? "dark" : "light";
+      applyTheme(next);
+      syncThemeToggleIcon(next);
     });
 
     await initV2Menus();
@@ -1837,12 +1885,16 @@
 
     if (mode === "label_settings") {
       qs("#labelSettingSaveBtn")?.addEventListener("click", () => saveLabelSettingsSection().then(() => showAlert("설정이 저장되었습니다.", "성공", "success")).catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#labelSettingTickBtn")?.addEventListener("click", () => tickAutoLabeling().then(() => showAlert("자동 라벨링 1회 실행을 완료했습니다.", "완료", "success")).catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#labelSettingAutoEnabled")?.addEventListener("change", () => {
+        saveLabelSettingsSection().catch((e) => showAlert(String(e), "오류", "error"));
+      });
       qs("#labelSettingPresetApplyBtn")?.addEventListener("click", async () => {
         const presetName = String(qs("#labelSettingPreset")?.value || "default");
         applyLabelSettingToForm(labelingPresetValues(presetName));
         await refreshLabelSettingHints();
       });
-      ["#labelSettingMethod", "#labelSettingBatch", "#labelSettingQuality", "#labelSettingPolicy"]
+      ["#labelSettingMethod", "#labelSettingBatch", "#labelSettingQuality", "#labelSettingPolicy", "#labelSettingInterval", "#labelSettingFreeLimit", "#labelSettingPaidLimit", "#labelSettingThresholdMid", "#labelSettingThresholdHigh"]
         .forEach((sel) => qs(sel)?.addEventListener("change", () => {
           syncLabelSettingModeUi();
           refreshLabelSettingHints().catch(() => {});

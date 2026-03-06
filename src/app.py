@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from storage.database import init_database
 from collector.scheduler import collect_scheduler
+from labeling.scheduler import labeling_auto_scheduler
 from writer.scheduler import writer_auto_scheduler
 from ui.main_window import MainWindow
 
@@ -22,8 +23,10 @@ def run() -> None:
     app = QApplication(sys.argv)
     init_database()
     collect_scheduler.start()
+    labeling_auto_scheduler.start()
     writer_auto_scheduler.start()
     app.aboutToQuit.connect(collect_scheduler.stop)
+    app.aboutToQuit.connect(labeling_auto_scheduler.stop)
     app.aboutToQuit.connect(writer_auto_scheduler.stop)
     window = MainWindow()
     window.show()

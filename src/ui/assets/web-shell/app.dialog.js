@@ -38,26 +38,41 @@
     function showModalDialog({ title = "알림", message = "", kind = "alert", variant = "info" } = {}) {
       bindAppModalKeydown();
       const root = qs("#appModal");
+      const panel = root?.querySelector(".app-modal-panel");
       const titleNode = qs("#appModalTitle");
+      const badgeNode = qs("#appModalBadge");
       const messageNode = qs("#appModalMessage");
-      const okBtn = qs("#appModalOk");
-      const cancelBtn = qs("#appModalCancel");
+      const actionsNode = qs("#appModalActions");
       const backdrop = qs("#appModalBackdrop");
-      const closeBtn = qs("#appModalClose");
-      if (!root || !titleNode || !messageNode || !okBtn || !cancelBtn || !backdrop || !closeBtn) {
+      if (!root || !panel || !titleNode || !badgeNode || !messageNode || !actionsNode || !backdrop) {
         if (kind === "confirm") return Promise.resolve(window.confirm(`${title}\n\n${message}`));
         window.alert(`${title}\n\n${message}`);
         return Promise.resolve(true);
       }
 
       titleNode.textContent = title;
+      badgeNode.textContent = String(variant || "info").toUpperCase();
       messageNode.innerHTML = String(message || "")
         .split("\n")
         .map((line) => modalEscape(line))
         .join("<br>");
-      root.setAttribute("data-variant", variant || "info");
-      cancelBtn.classList.toggle("hidden", kind !== "confirm");
+      panel.classList.remove("modal-info", "modal-success", "modal-warn", "modal-error");
+      panel.classList.add(`modal-${variant || "info"}`);
+
+      actionsNode.innerHTML = "";
+      const okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.className = "btn";
       okBtn.textContent = kind === "confirm" ? "확인" : "닫기";
+      actionsNode.appendChild(okBtn);
+      let cancelBtn = null;
+      if (kind === "confirm") {
+        cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "btn ghost";
+        cancelBtn.textContent = "취소";
+        actionsNode.appendChild(cancelBtn);
+      }
 
       root.classList.remove("hidden");
       root.setAttribute("aria-hidden", "false");
@@ -71,8 +86,7 @@
         };
 
         okBtn.onclick = onOk;
-        cancelBtn.onclick = onCancel;
-        closeBtn.onclick = onCancel;
+        if (cancelBtn) cancelBtn.onclick = onCancel;
         backdrop.onclick = onBackdrop;
       });
     }

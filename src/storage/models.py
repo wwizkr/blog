@@ -92,6 +92,10 @@ class RawContent(Base):
     source_url: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
     author: Mapped[str | None] = mapped_column(String(200))
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    label_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    label_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_labeled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    label_confidence: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     keyword: Mapped[Keyword | None] = relationship()
@@ -108,6 +112,10 @@ class RawImage(Base):
     source_url: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
     page_url: Mapped[str | None] = mapped_column(String(1000))
     local_path: Mapped[str | None] = mapped_column(String(500))
+    label_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    label_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_labeled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    label_confidence: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     content: Mapped[RawContent] = relationship(back_populates="images")
@@ -141,6 +149,21 @@ class ImageLabel(Base):
     labeled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     image: Mapped[RawImage] = relationship()
+
+
+class LabelingRunLog(Base):
+    __tablename__ = "labeling_run_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_kind: Mapped[str] = mapped_column(String(20), nullable=False)  # content/image/batch
+    method: Mapped[str] = mapped_column(String(20), nullable=False)  # rule/ai
+    stage_summary: Mapped[str | None] = mapped_column(Text)  # JSON string
+    labeled_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    target_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    free_api_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    paid_api_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class Persona(Base):

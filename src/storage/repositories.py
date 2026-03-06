@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import func, select
 
 from core.settings import settings
+from core.settings_keys import LabelSettingKeys
 
 from storage.database import session_scope
 from storage.models import (
@@ -27,6 +28,7 @@ from storage.models import (
     CrawlJob,
     GeneratedArticle,
     ImageLabel,
+    LabelingRunLog,
     Keyword,
     KeywordRelatedBlock,
     KeywordRelatedRelation,
@@ -132,6 +134,13 @@ def _normalize_image_mood(value: str | None) -> str | None:
     if not text:
         return None
     return _IMAGE_MOOD_KO.get(text, text)
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 @dataclass
@@ -996,25 +1005,36 @@ class CrawlRepository:
     @staticmethod
     def list_unlabeled_contents(limit: int = 200) -> list[RawContent]:
         with session_scope() as session:
-            labeled_subquery = select(ContentLabel.content_id)
             rows = session.execute(
-                select(RawContent).where(~RawContent.id.in_(labeled_subquery)).order_by(RawContent.created_at.desc()).limit(limit)
+                select(RawContent)
+                .where(RawContent.label_status == "pending")
+                .order_by(RawContent.created_at.desc())
+                .limit(limit)
             ).scalars().all()
             return rows
 
     @staticmethod
     def list_unlabeled_images(limit: int = 500) -> list[RawImage]:
         with session_scope() as session:
-            labeled_subquery = select(ImageLabel.image_id)
             rows = session.execute(
-                select(RawImage).where(~RawImage.id.in_(labeled_subquery)).order_by(RawImage.created_at.desc()).limit(limit)
+                select(RawImage)
+                .where(RawImage.label_status == "pending")
+                .order_by(RawImage.created_at.desc())
+                .limit(limit)
             ).scalars().all()
             return rows
 
 
 class LabelRepository:
     @staticmethod
-    def upsert_content_label(content_id: int, tone: str | None, sentiment: str | None, topics: list[str], quality_score: int) -> None:
+    def upsert_content_label(
+        content_id: int,
+        tone: str | None,
+        sentiment: str | None,
+        topics: list[str],
+        quality_score: int,
+        label_method: str = "rule",
+    ) -> None:
         normalized_tone = _normalize_content_tone(tone)
         normalized_sentiment = _normalize_content_sentiment(sentiment)
         normalized_topics = _normalize_content_topics(topics)
@@ -1026,7 +1046,7 @@ class LabelRepository:
                 existing.sentiment = normalized_sentiment
                 existing.topics = payload
                 existing.quality_score = quality_score
-                existing.label_method = "rule"
+                existing.label_method = str(label_method or "rule")[:20]
                 existing.labeled_at = datetime.utcnow()
                 return
             session.add(
@@ -1036,7 +1056,7 @@ class LabelRepository:
                     sentiment=normalized_sentiment,
                     topics=payload,
                     quality_score=quality_score,
-                    label_method="rule",
+                    label_method=str(label_method or "rule")[:20],
                 )
             )
 
@@ -1047,6 +1067,7 @@ class LabelRepository:
         mood: str | None,
         quality_score: int,
         is_thumbnail_candidate: bool,
+        label_method: str = "rule",
     ) -> None:
         normalized_category = _normalize_image_category(category)
         normalized_mood = _normalize_image_mood(mood)
@@ -1057,7 +1078,7 @@ class LabelRepository:
                 existing.mood = normalized_mood
                 existing.quality_score = quality_score
                 existing.is_thumbnail_candidate = is_thumbnail_candidate
-                existing.label_method = "rule"
+                existing.label_method = str(label_method or "rule")[:20]
                 existing.labeled_at = datetime.utcnow()
                 return
             session.add(
@@ -1067,22 +1088,211 @@ class LabelRepository:
                     mood=normalized_mood,
                     quality_score=quality_score,
                     is_thumbnail_candidate=is_thumbnail_candidate,
-                    label_method="rule",
+                    label_method=str(label_method or "rule")[:20],
                 )
             )
 
     @staticmethod
+    def mark_content_labeled(
+        content_id: int,
+        confidence: float,
+        stage_status: str,
+        completed: bool = True,
+    ) -> None:
+        now = datetime.utcnow()
+        with session_scope() as session:
+            row = session.get(RawContent, content_id)
+            if not row:
+                return
+            row.label_attempt_count = int(row.label_attempt_count or 0) + 1
+            row.label_confidence = max(0, min(100, int(round(float(confidence) * 100.0))))
+            row.last_labeled_at = now
+            row.label_status = "completed" if completed else str(stage_status or "pending")
+
+    @staticmethod
+    def mark_image_labeled(
+        image_id: int,
+        confidence: float,
+        stage_status: str,
+        completed: bool = True,
+    ) -> None:
+        now = datetime.utcnow()
+        with session_scope() as session:
+            row = session.get(RawImage, image_id)
+            if not row:
+                return
+            row.label_attempt_count = int(row.label_attempt_count or 0) + 1
+            row.label_confidence = max(0, min(100, int(round(float(confidence) * 100.0))))
+            row.last_labeled_at = now
+            row.label_status = "completed" if completed else str(stage_status or "pending")
+
+    @staticmethod
+    def record_run_log(
+        run_kind: str,
+        method: str,
+        stage_summary: dict,
+        labeled_count: int,
+        target_count: int,
+        free_api_used: int,
+        paid_api_used: int,
+        message: str = "",
+    ) -> None:
+        with session_scope() as session:
+            session.add(
+                LabelingRunLog(
+                    run_kind=str(run_kind or "batch")[:20],
+                    method=str(method or "rule")[:20],
+                    stage_summary=json.dumps(stage_summary or {}, ensure_ascii=False),
+                    labeled_count=max(0, int(labeled_count or 0)),
+                    target_count=max(0, int(target_count or 0)),
+                    free_api_used=max(0, int(free_api_used or 0)),
+                    paid_api_used=max(0, int(paid_api_used or 0)),
+                    message=str(message or "")[:500] or None,
+                )
+            )
+
+    @staticmethod
+    def list_recent_run_logs(limit: int = 80) -> list[dict]:
+        with session_scope() as session:
+            rows = session.execute(
+                select(LabelingRunLog).order_by(LabelingRunLog.created_at.desc()).limit(max(1, min(500, int(limit or 80))))
+            ).scalars().all()
+            payload: list[dict] = []
+            for row in rows:
+                try:
+                    stage_summary = json.loads(str(row.stage_summary or "{}"))
+                except Exception:
+                    stage_summary = {}
+                payload.append(
+                    {
+                        "id": int(row.id),
+                        "run_kind": row.run_kind,
+                        "method": row.method,
+                        "stage_summary": stage_summary if isinstance(stage_summary, dict) else {},
+                        "labeled_count": int(row.labeled_count or 0),
+                        "target_count": int(row.target_count or 0),
+                        "free_api_used": int(row.free_api_used or 0),
+                        "paid_api_used": int(row.paid_api_used or 0),
+                        "message": row.message or "",
+                        "created_at": row.created_at,
+                    }
+                )
+            return payload
+
+    @staticmethod
+    def get_label_status_counts() -> dict:
+        statuses = ["pending", "rule_done", "free_api_done", "paid_api_done", "completed"]
+        with session_scope() as session:
+            content_rows = session.execute(
+                select(RawContent.label_status, func.count()).group_by(RawContent.label_status)
+            ).all()
+            image_rows = session.execute(
+                select(RawImage.label_status, func.count()).group_by(RawImage.label_status)
+            ).all()
+
+            content_counts = {key: 0 for key in statuses}
+            image_counts = {key: 0 for key in statuses}
+            for status, count in content_rows:
+                key = str(status or "pending")
+                if key not in content_counts:
+                    content_counts[key] = 0
+                content_counts[key] += int(count or 0)
+            for status, count in image_rows:
+                key = str(status or "pending")
+                if key not in image_counts:
+                    image_counts[key] = 0
+                image_counts[key] += int(count or 0)
+
+            total_counts = {
+                "pending": int(content_counts.get("pending", 0)) + int(image_counts.get("pending", 0)),
+                "rule_done": int(content_counts.get("rule_done", 0)) + int(image_counts.get("rule_done", 0)),
+                "free_api_done": int(content_counts.get("free_api_done", 0)) + int(image_counts.get("free_api_done", 0)),
+                "paid_api_done": int(content_counts.get("paid_api_done", 0)) + int(image_counts.get("paid_api_done", 0)),
+                "completed": int(content_counts.get("completed", 0)) + int(image_counts.get("completed", 0)),
+            }
+            total_counts["completed"] += (
+                total_counts["rule_done"] + total_counts["free_api_done"] + total_counts["paid_api_done"]
+            )
+
+            return {
+                "content": {k: int(content_counts.get(k, 0)) for k in statuses},
+                "image": {k: int(image_counts.get(k, 0)) for k in statuses},
+                "total": total_counts,
+            }
+
+    @staticmethod
     def get_label_stats() -> dict:
         with session_scope() as session:
-            content_total = session.execute(select(RawContent)).scalars().all()
-            image_total = session.execute(select(RawImage)).scalars().all()
-            content_labeled = session.execute(select(ContentLabel)).scalars().all()
-            image_labeled = session.execute(select(ImageLabel)).scalars().all()
+            content_total = int(session.execute(select(func.count()).select_from(RawContent)).scalar_one() or 0)
+            image_total = int(session.execute(select(func.count()).select_from(RawImage)).scalar_one() or 0)
+            content_labeled = int(session.execute(select(func.count()).select_from(ContentLabel)).scalar_one() or 0)
+            image_labeled = int(session.execute(select(func.count()).select_from(ImageLabel)).scalar_one() or 0)
             return {
-                "contents_total": len(content_total),
-                "contents_labeled": len(content_labeled),
-                "images_total": len(image_total),
-                "images_labeled": len(image_labeled),
+                "contents_total": content_total,
+                "contents_labeled": content_labeled,
+                "images_total": image_total,
+                "images_labeled": image_labeled,
+            }
+
+    @staticmethod
+    def get_label_automation_snapshot() -> dict:
+        with session_scope() as session:
+            contents_total = int(session.execute(select(func.count()).select_from(RawContent)).scalar_one() or 0)
+            contents_labeled = int(session.execute(select(func.count()).select_from(ContentLabel)).scalar_one() or 0)
+            images_total = int(session.execute(select(func.count()).select_from(RawImage)).scalar_one() or 0)
+            images_labeled = int(session.execute(select(func.count()).select_from(ImageLabel)).scalar_one() or 0)
+
+            contents_pending = max(0, contents_total - contents_labeled)
+            images_pending = max(0, images_total - images_labeled)
+            total = contents_total + images_total
+            done = contents_labeled + images_labeled
+            completion_rate = float((done / total) * 100.0) if total > 0 else 100.0
+
+            last_content_labeled_at = session.execute(select(func.max(ContentLabel.labeled_at))).scalar_one_or_none()
+            last_image_labeled_at = session.execute(select(func.max(ImageLabel.labeled_at))).scalar_one_or_none()
+            avg_content_quality = float(session.execute(select(func.avg(ContentLabel.quality_score))).scalar_one_or_none() or 0.0)
+            avg_image_quality = float(session.execute(select(func.avg(ImageLabel.quality_score))).scalar_one_or_none() or 0.0)
+            content_method_rows = session.execute(
+                select(ContentLabel.label_method, func.count()).group_by(ContentLabel.label_method)
+            ).all()
+            image_method_rows = session.execute(
+                select(ImageLabel.label_method, func.count()).group_by(ImageLabel.label_method)
+            ).all()
+            content_method_breakdown = {str(method or "rule"): int(count or 0) for method, count in content_method_rows}
+            image_method_breakdown = {str(method or "rule"): int(count or 0) for method, count in image_method_rows}
+
+            today = datetime.utcnow().strftime("%Y%m%d")
+            quota_date = str(AppSettingRepository.get_value(LabelSettingKeys.QUOTA_DATE, today) or today)
+            free_used = _safe_int(AppSettingRepository.get_value(LabelSettingKeys.FREE_API_USED, "0"), 0)
+            paid_used = _safe_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_API_USED, "0"), 0)
+            if quota_date != today:
+                free_used = 0
+                paid_used = 0
+            free_limit = _safe_int(AppSettingRepository.get_value(LabelSettingKeys.FREE_API_DAILY_LIMIT, "200"), 200)
+            paid_limit = _safe_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_API_DAILY_LIMIT, "20"), 20)
+
+            return {
+                "contents_total": contents_total,
+                "contents_labeled": contents_labeled,
+                "contents_pending": contents_pending,
+                "images_total": images_total,
+                "images_labeled": images_labeled,
+                "images_pending": images_pending,
+                "total": total,
+                "completed": done,
+                "completion_rate": completion_rate,
+                "last_content_labeled_at": last_content_labeled_at,
+                "last_image_labeled_at": last_image_labeled_at,
+                "avg_content_quality": avg_content_quality,
+                "avg_image_quality": avg_image_quality,
+                "content_method_breakdown": content_method_breakdown,
+                "image_method_breakdown": image_method_breakdown,
+                "free_api_daily_limit": free_limit,
+                "paid_api_daily_limit": paid_limit,
+                "free_api_used_today": max(0, free_used),
+                "paid_api_used_today": max(0, paid_used),
+                "free_api_remaining_today": max(0, free_limit - max(0, free_used)),
+                "paid_api_remaining_today": max(0, paid_limit - max(0, paid_used)),
             }
 
 

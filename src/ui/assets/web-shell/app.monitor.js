@@ -221,8 +221,14 @@
       if (state.monitorCursor) query.set("cursor", state.monitorCursor);
       if (state.monitorStageFilter && state.monitorStageFilter !== "all") query.set("stage", state.monitorStageFilter);
       let payload = null;
+      let labelStatusCounts = null;
       try {
-        payload = await request(`/api/v2/monitor/events?${query.toString()}`);
+        const [eventPayload, statusPayload] = await Promise.all([
+          request(`/api/v2/monitor/events?${query.toString()}`),
+          request("/api/labeling/status-counts").catch(() => null),
+        ]);
+        payload = eventPayload;
+        labelStatusCounts = statusPayload;
       } catch (err) {
         const tbody = qs("#monitorTable tbody");
         if (tbody) tbody.innerHTML = "<tr><td colspan='6'>모니터 조회 실패</td></tr>";
@@ -320,6 +326,25 @@
       if (groupHint) {
         const text = Object.entries(grouped).map(([k, v]) => `${k}:${v}`).join(", ");
         groupHint.textContent = text ? `실패 원인 그룹: ${text}` : "실패 원인 그룹: 없음";
+      }
+      const labelStatusHintTotal = qs("#monitorLabelStatusHintTotal");
+      const labelStatusHintContent = qs("#monitorLabelStatusHintContent");
+      const labelStatusHintImage = qs("#monitorLabelStatusHintImage");
+      if (labelStatusHintTotal || labelStatusHintContent || labelStatusHintImage) {
+        const bucket = labelStatusCounts && typeof labelStatusCounts === "object" ? labelStatusCounts : {};
+        const total = bucket.total || {};
+        const content = bucket.content || {};
+        const image = bucket.image || {};
+        const toText = (v) => Number(v || 0);
+        if (labelStatusHintTotal) {
+          labelStatusHintTotal.textContent = `라벨 상태(전체) | pending:${toText(total.pending)} | rule_done:${toText(total.rule_done)} | free_api_done:${toText(total.free_api_done)} | paid_api_done:${toText(total.paid_api_done)} | completed:${toText(total.completed)}`;
+        }
+        if (labelStatusHintContent) {
+          labelStatusHintContent.textContent = `라벨 상태(텍스트) | pending:${toText(content.pending)} | rule_done:${toText(content.rule_done)} | free_api_done:${toText(content.free_api_done)} | paid_api_done:${toText(content.paid_api_done)} | completed:${toText(content.completed)}`;
+        }
+        if (labelStatusHintImage) {
+          labelStatusHintImage.textContent = `라벨 상태(이미지) | pending:${toText(image.pending)} | rule_done:${toText(image.rule_done)} | free_api_done:${toText(image.free_api_done)} | paid_api_done:${toText(image.paid_api_done)} | completed:${toText(image.completed)}`;
+        }
       }
       const cursorHint = qs("#monitorCursorHint");
       if (cursorHint) {

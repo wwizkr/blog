@@ -230,18 +230,23 @@
 
       if (!state.contentRows.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='6'>수집 텍스트 없음</td>";
+        tr.innerHTML = "<td colspan='7'>수집 텍스트 없음</td>";
         tbody.appendChild(tr);
         return;
       }
 
       state.contentRows.forEach((r) => {
+        const labelStatus = String(r.label_status || "pending");
+        const statusClass = labelStatus === "completed"
+          ? "ok"
+          : (labelStatus.includes("done") ? "warn" : "neutral");
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${r.id}</td>
           <td>${escapeHtml(r.title || "(제목 없음)")}</td>
           <td>${escapeHtml(r.keyword || "-")}</td>
           <td>${escapeHtml(r.channel || "-")}</td>
+          <td><span class="badge-status ${statusClass}">${escapeHtml(labelStatus)}</span></td>
           <td>${fmt(r.created_at)}</td>
           <td><button type="button" class="btn ghost">상세/라벨</button></td>
         `;
@@ -266,6 +271,10 @@
       }
 
       state.imageRows.forEach((r) => {
+        const labelStatus = String(r.label_status || "pending");
+        const statusClass = labelStatus === "completed"
+          ? "ok"
+          : (labelStatus.includes("done") ? "warn" : "neutral");
         const card = document.createElement("article");
         card.className = "collected-gallery-item";
         const src = r.local_url || r.image_url || "";
@@ -273,6 +282,7 @@
           <img class="collected-gallery-thumb" src="${escapeHtml(src)}" alt="image-${r.id}" />
           <div class="collected-gallery-body">
             <div class="collected-gallery-meta">#${r.id} | content_id=${r.content_id || "-"}</div>
+            <div class="collected-gallery-meta">라벨: <span class="badge-status ${statusClass}">${escapeHtml(labelStatus)}</span> | 시도 ${Number(r.label_attempt_count || 0)}</div>
             <div class="collected-gallery-meta">${escapeHtml(r.image_url || "-")}</div>
             <div class="collected-gallery-actions"><button type="button" class="btn ghost">상세/라벨</button></div>
           </div>
