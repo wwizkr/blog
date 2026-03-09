@@ -7,5 +7,6 @@ dist/
 build/
 *.spec
 blogwriter_data/
+mublo_ops_data/
 tmp/
 backup/
