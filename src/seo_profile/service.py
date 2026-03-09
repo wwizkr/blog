@@ -43,7 +43,7 @@ class KeywordSeoProfileService:
                 .limit(max(3, min(30, int(sample_limit or 12))))
             ).scalars().all()
             if not contents:
-                raise ValueError("analyzable contents not found")
+                raise ValueError("글 수집 후 분석이 가능합니다.")
 
             image_counts = {}
             if contents:

@@ -41,10 +41,12 @@
         err.fields = (data && data.fields && typeof data.fields === "object") ? data.fields : {};
         err.requestId = String((data && data.request_id) || res.headers.get("X-Request-Id") || "");
         if (err.code || err.requestId) {
-          const tags = [];
-          if (err.code) tags.push(`code=${err.code}`);
-          if (err.requestId) tags.push(`request_id=${err.requestId}`);
-          err.message = `${err.message}\n(${tags.join(" / ")})`;
+          console.warn("API request failed", {
+            url,
+            status: err.status,
+            errorCode: err.code,
+            requestId: err.requestId,
+          });
         }
         throw err;
       }

@@ -3,9 +3,16 @@ from __future__ import annotations
 import os
 import sys
 
-# QWebEngine(Chromium) DirectComposition 경고 억제
+# QWebEngine(Chromium) GPU 초기화/DirectComposition 로그 억제
 _flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
-_extra = "--disable-gpu --disable-gpu-compositing --disable-direct-composition --use-angle=swiftshader"
+_extra = (
+    "--disable-gpu "
+    "--disable-gpu-compositing "
+    "--disable-direct-composition "
+    "--use-angle=swiftshader "
+    "--enable-logging=stderr "
+    "--log-level=3"
+)
 if _extra not in _flags:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{_flags} {_extra}".strip()
 os.environ.setdefault("QT_OPENGL", "software")

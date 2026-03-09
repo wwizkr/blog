@@ -2754,6 +2754,11 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         final_payload = payload
         if isinstance(payload, dict):
             final_payload = dict(payload)
+            error_code = str(final_payload.get("error_code") or "").strip()
+            if isinstance(final_payload.get("error"), str):
+                final_payload["error"] = _humanize_error_message(final_payload["error"], status=status, error_code=error_code)
+            if isinstance(final_payload.get("message"), str):
+                final_payload["message"] = _humanize_error_message(final_payload["message"], status=status, error_code=error_code)
             final_payload.setdefault("request_id", request_id)
         body = json.dumps(final_payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -2787,6 +2792,73 @@ def _safe_json_object(raw: str | None) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+_ERROR_MESSAGE_MAP = {
+    "forbidden path": "요청 경로가 올바르지 않습니다.",
+    "file not found": "요청한 파일을 찾을 수 없습니다.",
+    "not found": "요청한 데이터를 찾을 수 없습니다.",
+    "invalid keyword seo profile route": "요청 경로가 올바르지 않습니다.",
+    "invalid keyword seo profile analyze route": "요청 경로가 올바르지 않습니다.",
+    "invalid image route": "요청 경로가 올바르지 않습니다.",
+    "invalid json body": "요청 형식이 올바르지 않습니다.",
+    "source_keyword_id is required": "기준 키워드를 선택하세요.",
+    "content_id is required": "대상 글을 선택하세요.",
+    "image_id is required": "대상 이미지를 선택하세요.",
+    "keyword not found": "키워드를 찾을 수 없습니다.",
+    "image file not found": "이미지 파일을 찾을 수 없습니다.",
+    "forbidden image path": "이미지 파일 경로가 올바르지 않습니다.",
+    "name is required": "이름을 입력하세요.",
+    "duplicate or invalid category": "카테고리명이 중복되었거나 형식이 올바르지 않습니다.",
+    "category_id is required": "카테고리를 선택하세요.",
+    "keyword is required": "키워드를 입력하세요.",
+    "duplicate or invalid keyword": "키워드가 중복되었거나 형식이 올바르지 않습니다.",
+    "keywords(list) is required": "키워드 목록을 입력하세요.",
+    "keyword_ids(list) is required": "키워드를 1개 이상 선택하세요.",
+    "related_keyword_id is required": "연관 키워드를 선택하세요.",
+    "invalid stage": "모니터링 단계 값이 올바르지 않습니다.",
+    "invalid cursor": "모니터링 조회 기준이 올바르지 않습니다.",
+    "article_id/target_channel is required": "글과 발행 채널을 선택하세요.",
+    "invalid status": "상태 값이 올바르지 않습니다.",
+    "article_ids(list) is required": "글을 1개 이상 선택하세요.",
+    "provider not found": "AI 제공자를 찾을 수 없습니다.",
+    "channel_code is required": "채널을 선택하세요.",
+    "api_url is required": "API URL을 입력하세요.",
+    "http error": "외부 API 호출 중 HTTP 오류가 발생했습니다.",
+}
+
+
+def _humanize_error_message(message: str, status: int = 400, error_code: str = "") -> str:
+    text = str(message or "").strip()
+    if not text:
+        return "요청 처리 중 오류가 발생했습니다."
+    if re.search(r"[가-힣]", text):
+        return text
+
+    normalized = " ".join(text.lower().split())
+    if normalized in _ERROR_MESSAGE_MAP:
+        return _ERROR_MESSAGE_MAP[normalized]
+
+    if normalized.startswith("http error") or normalized.startswith("http 오류"):
+        return "외부 API 호출 중 HTTP 오류가 발생했습니다."
+    if normalized.startswith("urlopen error") or "connection refused" in normalized or "failed to establish a new connection" in normalized:
+        return "외부 API에 연결하지 못했습니다. 주소와 서버 상태를 확인하세요."
+    if "timed out" in normalized or "timeout" in normalized:
+        return "요청 시간이 초과되었습니다. 잠시 후 다시 시도하세요."
+    if "not found" in normalized:
+        return "요청한 데이터를 찾을 수 없습니다."
+    if "is required" in normalized:
+        return "필수 입력값이 누락되었습니다."
+    if normalized.startswith("invalid "):
+        return "요청 값이 올바르지 않습니다."
+    if "forbidden" in normalized:
+        return "접근할 수 없는 요청입니다."
+
+    if error_code.startswith("MONITOR_"):
+        return "모니터링 조회 중 오류가 발생했습니다."
+    if status >= 500:
+        return "서버 처리 중 오류가 발생했습니다. 잠시 후 다시 시도하세요."
+    return "요청 처리 중 오류가 발생했습니다."
 
 
 def _sanitize_writer_channel_policies(raw: dict | None) -> dict[str, dict]:
