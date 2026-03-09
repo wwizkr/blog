@@ -68,7 +68,7 @@ class _EditorServer:
 <head>
   <meta charset=\"UTF-8\" />
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-  <title>BlogWriter Editor</title>
+  <title>MubloOps Editor</title>
   <link href=\"/assets/mublo-editor/MubloEditor.css\" rel=\"stylesheet\" />
   <style>
     html, body { height: 100%; margin: 0; background: #fff; }

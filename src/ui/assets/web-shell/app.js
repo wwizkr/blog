@@ -43,7 +43,10 @@
     writerPollTimer: null,
     selectedKeywordId: null,
     selectedRelatedKeywordId: null,
-    selectedBlockId: null,
+    relatedSourceFilter: "all",
+    relatedSyncLog: "",
+    keywordSeoProfile: null,
+    keywordSeoStatus: "",
     selectedChannelId: null,
     selectedContentId: null,
     selectedImageId: null,
@@ -491,6 +494,7 @@
         renderCategoryTable();
         syncSourceKeywordSelect();
         loadRelatedSection();
+        loadKeywordSeoProfile(k.id).catch((e) => showAlert(String(e), "오류", "error"));
       });
       if (state.selectedKeywordId === k.id) tr.classList.add("selected");
       tbody.appendChild(tr);
@@ -519,6 +523,7 @@
     if (state.selectedKeywordId && !state.keywords.some((x) => x.id === state.selectedKeywordId)) state.selectedKeywordId = null;
     renderKeywordTable();
     syncSourceKeywordSelect();
+    await loadKeywordSeoProfile(state.selectedKeywordId, { silent: true });
   }
 
   async function loadRelatedLimit() {
@@ -530,45 +535,168 @@
   async function loadRelatedSection() {
     const sourceId = Number(qs("#sourceKeywordSelect")?.value || 0);
     const relatedBody = qs("#relatedTable tbody");
-    const blockBody = qs("#blockTable tbody");
+    const sourceFilter = String(qs("#relatedSourceFilter")?.value || state.relatedSourceFilter || "all");
 
     if (!sourceId) {
-      if (relatedBody) relatedBody.innerHTML = "<tr><td colspan='4'>원본 키워드 없음</td></tr>";
-      if (blockBody) blockBody.innerHTML = "<tr><td colspan='3'>원본 키워드 없음</td></tr>";
+      if (relatedBody) relatedBody.innerHTML = "<tr><td colspan='6'>원본 키워드 없음</td></tr>";
       return;
     }
 
-    const [related, blocks] = await Promise.all([
-      request(`/api/related?source_keyword_id=${sourceId}`),
-      request(`/api/related-blocks?source_keyword_id=${sourceId}`),
-    ]);
+    const related = await request(`/api/related?source_keyword_id=${sourceId}`);
+    const sourceOptions = ["all", ...new Set((related || []).map((r) => String(r.source_type || "").trim()).filter(Boolean))];
+    const sourceSelect = qs("#relatedSourceFilter");
+    if (sourceSelect) {
+      const prev = sourceFilter;
+      sourceSelect.innerHTML = "";
+      sourceOptions.forEach((value) => {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = value === "all" ? "전체" : value;
+        sourceSelect.appendChild(opt);
+      });
+      sourceSelect.value = sourceOptions.includes(prev) ? prev : "all";
+      state.relatedSourceFilter = sourceSelect.value;
+    }
+    const filteredRelated = (related || []).filter((r) => state.relatedSourceFilter === "all" || String(r.source_type || "") === state.relatedSourceFilter);
     if (relatedBody) {
-      relatedBody.innerHTML = related.length ? "" : "<tr><td colspan='4'>연관키워드 없음</td></tr>";
-      related.forEach((r) => {
+      relatedBody.innerHTML = filteredRelated.length ? "" : "<tr><td colspan='6'>연관키워드 없음</td></tr>";
+      filteredRelated.forEach((r) => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${r.relation_id}</td><td>${r.related_keyword}</td><td>${r.collect_count}</td><td>${fmt(r.last_seen_at)}</td>`;
+        tr.className = r.is_active ? "related-row is-active" : "related-row is-inactive";
+        const statusLabel = r.is_active ? "활성" : "비활성";
+        tr.innerHTML = `
+          <td>${r.relation_id}</td>
+          <td>${r.related_keyword}</td>
+          <td>${r.source_type || "-"}</td>
+          <td>
+            <label class="switch related-switch" data-on="${r.is_active ? "true" : "false"}" aria-label="${r.related_keyword} 상태">
+              <input type="checkbox" ${r.is_active ? "checked" : ""} data-related-id="${r.related_keyword_id}" />
+              <span class="switch-slider"></span>
+            </label>
+            <span class="related-status-chip ${r.is_active ? "is-active" : "is-inactive"}">${statusLabel}</span>
+          </td>
+          <td>${r.collect_count}</td>
+          <td>${fmt(r.last_seen_at)}</td>
+        `;
         tr.addEventListener("click", () => {
           state.selectedRelatedKeywordId = r.related_keyword_id;
           qsa("#relatedTable tbody tr").forEach((el) => el.classList.remove("selected"));
           tr.classList.add("selected");
         });
+        const checkbox = tr.querySelector("input[type='checkbox']");
+        checkbox?.addEventListener("click", (event) => event.stopPropagation());
+        checkbox?.addEventListener("change", async (event) => {
+          event.stopPropagation();
+          const target = event.currentTarget;
+          target.disabled = true;
+          try {
+            await toggleRelatedKeyword(r.related_keyword_id, false);
+          } catch (error) {
+            target.checked = !target.checked;
+            showAlert(String(error), "오류", "error");
+          } finally {
+            target.disabled = false;
+          }
+        });
         relatedBody.appendChild(tr);
       });
     }
+    const logNode = qs("#relatedSyncLog");
+    if (logNode) logNode.textContent = state.relatedSyncLog || `연관키워드 ${filteredRelated.length}건 표시 / 전체 ${related.length}건`;
+  }
 
-    if (blockBody) {
-      blockBody.innerHTML = blocks.length ? "" : "<tr><td colspan='3'>차단 목록 없음</td></tr>";
-      blocks.forEach((r) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${r.block_id}</td><td>${r.related_keyword}</td><td>${fmt(r.created_at)}</td>`;
-        tr.addEventListener("click", () => {
-          state.selectedBlockId = r.block_id;
-          qsa("#blockTable tbody tr").forEach((el) => el.classList.remove("selected"));
-          tr.classList.add("selected");
-        });
-        blockBody.appendChild(tr);
-      });
+  function renderChipList(targetSelector, items, emptyLabel = "-") {
+    const node = qs(targetSelector);
+    if (!node) return;
+    node.innerHTML = "";
+    const values = Array.isArray(items) ? items.filter((item) => String(item || "").trim()) : [];
+    if (!values.length) {
+      const span = document.createElement("span");
+      span.className = "chip";
+      span.textContent = emptyLabel;
+      node.appendChild(span);
+      return;
     }
+    values.forEach((item) => {
+      const span = document.createElement("span");
+      span.className = "chip";
+      span.textContent = String(item);
+      node.appendChild(span);
+    });
+  }
+
+  function renderKeywordSeoPanel(profilePayload = null) {
+    const profile = profilePayload || null;
+    state.keywordSeoProfile = profile;
+    const emptyNode = qs("#keywordSeoEmpty");
+    const panelNode = qs("#keywordSeoPanel");
+    const statusNode = qs("#keywordSeoStatus");
+    if (statusNode) {
+      statusNode.textContent = state.keywordSeoStatus || (profile ? `최근 분석 ${fmt(profile.analyzed_at)}` : "분석 전입니다.");
+    }
+    if (!profile) {
+      if (emptyNode) emptyNode.classList.remove("hidden");
+      if (panelNode) panelNode.classList.add("hidden");
+      renderChipList("#keywordSeoSections", [], "데이터 없음");
+      renderChipList("#keywordSeoTerms", [], "데이터 없음");
+      const summaryNode = qs("#keywordSeoSummary");
+      if (summaryNode) summaryNode.textContent = "-";
+      ["#keywordSeoSampleCount", "#keywordSeoLengthRange", "#keywordSeoHeadingCount", "#keywordSeoImageCount", "#keywordSeoFormat", "#keywordSeoAnalyzedAt"].forEach((selector) => {
+        const node = qs(selector);
+        if (node) node.textContent = "-";
+      });
+      return;
+    }
+    if (emptyNode) emptyNode.classList.add("hidden");
+    if (panelNode) panelNode.classList.remove("hidden");
+    const lengthRange = profile.recommended_length_min && profile.recommended_length_max
+      ? `${profile.recommended_length_min} ~ ${profile.recommended_length_max}자`
+      : "-";
+    const setText = (selector, value) => {
+      const node = qs(selector);
+      if (node) node.textContent = value;
+    };
+    setText("#keywordSeoSampleCount", `${profile.sample_count || 0}건`);
+    setText("#keywordSeoLengthRange", lengthRange);
+    setText("#keywordSeoHeadingCount", profile.recommended_heading_count != null ? `${profile.recommended_heading_count}개` : "-");
+    setText("#keywordSeoImageCount", profile.recommended_image_count != null ? `${profile.recommended_image_count}개` : "-");
+    setText("#keywordSeoFormat", profile.dominant_format || "-");
+    setText("#keywordSeoAnalyzedAt", fmt(profile.analyzed_at));
+    const summaryNode = qs("#keywordSeoSummary");
+    if (summaryNode) summaryNode.textContent = profile.summary_text || "-";
+    renderChipList("#keywordSeoSections", profile.common_sections || [], "섹션 없음");
+    renderChipList("#keywordSeoTerms", profile.common_terms || [], "표현 없음");
+  }
+
+  async function loadKeywordSeoProfile(keywordId = null, { silent = false } = {}) {
+    const targetId = Number(keywordId || state.selectedKeywordId || 0);
+    if (!targetId) {
+      state.keywordSeoStatus = "선택된 키워드가 없습니다.";
+      renderKeywordSeoPanel(null);
+      return;
+    }
+    if (!silent) {
+      state.keywordSeoStatus = "SEO 패턴을 불러오는 중입니다.";
+      renderKeywordSeoPanel(state.keywordSeoProfile);
+    }
+    const result = await request(`/api/keywords/${targetId}/seo-profile`);
+    state.keywordSeoStatus = result?.profile ? `최근 분석 ${fmt(result.profile.analyzed_at)}` : "저장된 SEO 패턴이 없습니다.";
+    renderKeywordSeoPanel(result?.profile || null);
+  }
+
+  async function analyzeKeywordSeoProfile() {
+    const targetId = Number(state.selectedKeywordId || 0);
+    if (!targetId) return showAlert("분석할 키워드를 선택하세요.");
+    const sampleLimit = Number(qs("#keywordSeoSampleLimit")?.value || 12);
+    state.keywordSeoStatus = "SEO 패턴을 분석 중입니다.";
+    renderKeywordSeoPanel(state.keywordSeoProfile);
+    const result = await request(`/api/keywords/${targetId}/seo-profile/analyze`, {
+      method: "POST",
+      body: JSON.stringify({ sample_limit: sampleLimit }),
+    });
+    state.keywordSeoStatus = `[${fmt(new Date().toISOString())}] SEO 패턴 분석 완료 / 샘플 ${result.sample_count || 0}건`;
+    renderKeywordSeoPanel(result?.profile || null);
+    showAlert("SEO 패턴 분석이 완료되었습니다.", "성공", "success");
   }
 
   async function refreshKeywordSection() {
@@ -589,6 +717,7 @@
     const badge = qs("#relatedLimitBadge");
     if (badge) badge.textContent = `현재 상한: ${relatedLimit.limit}개`;
     await loadRelatedSection();
+    await loadKeywordSeoProfile(state.selectedKeywordId, { silent: true });
   }
 
   async function addCategory() {
@@ -698,22 +827,33 @@
     await loadRelatedSection();
   }
 
-  async function blockRelated() {
-    const sourceId = Number(qs("#sourceKeywordSelect")?.value || 0);
-    if (!sourceId || !state.selectedRelatedKeywordId) return showAlert("원본/연관 키워드를 선택하세요.");
-    await request("/api/related/block", {
+  async function toggleRelatedKeyword(relatedKeywordId = null, shouldNotify = true) {
+    const targetId = Number(relatedKeywordId || state.selectedRelatedKeywordId || 0);
+    if (!targetId) return showAlert("연관키워드를 선택하세요.");
+    await request("/api/related/toggle", {
       method: "POST",
-      body: JSON.stringify({ source_keyword_id: sourceId, related_keyword_id: state.selectedRelatedKeywordId }),
+      body: JSON.stringify({ related_keyword_id: targetId }),
     });
-    state.selectedRelatedKeywordId = null;
+    await loadKeywords();
     await loadRelatedSection();
+    if (shouldNotify) showAlert("연관키워드 상태가 변경되었습니다.", "성공", "success");
   }
 
-  async function unblockRelated() {
-    if (!state.selectedBlockId) return showAlert("해제할 차단 항목을 선택하세요.");
-    await request(`/api/related-blocks/${state.selectedBlockId}`, { method: "DELETE" });
-    state.selectedBlockId = null;
+  async function syncRelatedKeywords() {
+    const sourceId = Number(qs("#sourceKeywordSelect")?.value || 0);
+    if (!sourceId) return showAlert("원본 키워드를 선택하세요.");
+    const sourceKeyword = (state.keywords || []).find((x) => Number(x.id) === sourceId)?.keyword || String(sourceId);
+    const ok = await showConfirm(`'${sourceKeyword}' 기준으로 연관키워드를 수집할까요?`, "연관키워드 수집", "warn");
+    if (!ok) return;
+    const result = await request("/api/related/sync", {
+      method: "POST",
+      body: JSON.stringify({ source_keyword_id: sourceId }),
+    });
+    await loadKeywords();
+    const detail = Object.entries(result.by_source || {}).map(([k, v]) => `${k}:${v}`).join(", ");
+    state.relatedSyncLog = `[${fmt(new Date().toISOString())}] 원본 '${sourceKeyword}' 수집 완료 / 반영 ${result.applied || 0}건${detail ? ` / ${detail}` : ""}`;
     await loadRelatedSection();
+    showAlert(`연관키워드 수집 완료\n반영: ${result.applied || 0}건${detail ? `\n소스: ${detail}` : ""}`, "완료", "success");
   }
 
   function renderChannelTable(rows) {
@@ -785,6 +925,12 @@
     publishWriterBoardArticle,
     bulkPublishWriterBoardArticles,
     bulkUpdateWriterBoardStatus,
+    openWriterArticleEditor,
+    openWriterArticleViewer,
+    closeWriterArticleEditor,
+    closeWriterArticleViewer,
+    saveWriterArticleEditor,
+    regenerateWriterArticle,
     runWriter,
     stopWriter,
     startWriterPolling,
@@ -940,6 +1086,7 @@
     normalizeCollectSettingSnapshot,
     collectSettingDiffLines,
     refreshCollectSettingHints,
+    renderKeywordSourceChecklist,
     updateCollectChecklistMeta,
     renderCollectChecklist,
     toggleCollectChecklistAll,
@@ -1349,7 +1496,7 @@
     state.writerSettingProviderRows = providers || [];
 
     const providerSel = qs("#writerSettingAiProviderId");
-    providerSel.innerHTML = "";
+    providerSel.innerHTML = "<option value=''>자동 선택</option>";
     (providers || [])
       .filter((p) => !!p.is_enabled)
       .sort((a, b) => Number(a.priority || 999) - Number(b.priority || 999))
@@ -1362,6 +1509,7 @@
     selectValueIfExists(providerSel, String(s.default_ai_provider_id || ""));
 
     qs("#writerSettingAiPriority").value = s.ai_provider_priority || "cost_first";
+    qs("#writerSettingMinSeoReview").value = String(s.min_seo_review_score || 60);
 
     const policyMap = {};
     Object.entries(s.channel_policies || {}).forEach(([key, value]) => {
@@ -1389,8 +1537,10 @@
     await request("/api/v2/settings/writer", {
       method: "POST",
       body: JSON.stringify({
+        default_ai_provider_id: toNullableNumber(qs("#writerSettingAiProviderId").value),
         channel_policies: channelPolicies,
         ai_provider_priority: qs("#writerSettingAiPriority").value || "cost_first",
+        min_seo_review_score: clampInt(qs("#writerSettingMinSeoReview").value || 60, 0, 100, 60),
       }),
     });
   }
@@ -1585,7 +1735,13 @@
         state.keywordPage = 1;
         renderKeywordTable();
       });
-      qs("#sourceKeywordSelect")?.addEventListener("change", async (e) => { state.selectedKeywordId = Number(e.target.value || 0) || null; await loadRelatedSection(); });
+      qs("#sourceKeywordSelect")?.addEventListener("change", async (e) => {
+        state.selectedKeywordId = Number(e.target.value || 0) || null;
+        renderKeywordTable();
+        await loadRelatedSection();
+        await loadKeywordSeoProfile(state.selectedKeywordId, { silent: true });
+      });
+      qs("#relatedSourceFilter")?.addEventListener("change", async (e) => { state.relatedSourceFilter = String(e.target.value || "all"); await loadRelatedSection(); });
       qs("#keywordCategorySelect")?.addEventListener("change", (e) => {
         state.selectedCategoryId = Number(e.target.value || 0) || null;
         state.keywordPage = 1;
@@ -1594,6 +1750,7 @@
         renderKeywordTable();
         syncSourceKeywordSelect();
         loadRelatedSection().catch((err) => showAlert(String(err)));
+        loadKeywordSeoProfile(state.selectedKeywordId, { silent: true }).catch((err) => showAlert(String(err)));
       });
       qs("#categoryAddBtn")?.addEventListener("click", () => addCategory().catch((e) => showAlert(String(e), "오류", "error")));
       qs("#categoryRenameBtn")?.addEventListener("click", () => renameCategory().catch((e) => showAlert(String(e), "오류", "error")));
@@ -1604,8 +1761,9 @@
       qs("#keywordToggleBtn")?.addEventListener("click", () => toggleKeyword().catch((e) => showAlert(String(e), "오류", "error")));
       qs("#keywordDeleteBtn")?.addEventListener("click", () => deleteKeyword().catch((e) => showAlert(String(e), "오류", "error")));
       qs("#relatedReloadBtn")?.addEventListener("click", () => loadRelatedSection().catch((e) => showAlert(String(e), "오류", "error")));
-      qs("#relatedBlockBtn")?.addEventListener("click", () => blockRelated().catch((e) => showAlert(String(e), "오류", "error")));
-      qs("#blockUnblockBtn")?.addEventListener("click", () => unblockRelated().catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#relatedSyncBtn")?.addEventListener("click", () => syncRelatedKeywords().catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#keywordSeoReloadBtn")?.addEventListener("click", () => loadKeywordSeoProfile().catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#keywordSeoAnalyzeBtn")?.addEventListener("click", () => analyzeKeywordSeoProfile().catch((e) => showAlert(String(e), "오류", "error")));
       if (qs("#categorySort")) qs("#categorySort").value = state.categorySort || "name_asc";
       if (qs("#keywordSort")) qs("#keywordSort").value = state.keywordSort || "created_desc";
       if (qs("#keywordSearchInput")) qs("#keywordSearchInput").value = state.keywordSearch || "";
@@ -1645,6 +1803,7 @@
       qs("#labelingRefreshBtn")?.addEventListener("click", () => refreshLabelingSection().catch((e) => showAlert(String(e), "오류", "error")));
       qs("#runContentLabelingBtn")?.addEventListener("click", () => runLabelingStage("content").catch((e) => showAlert(String(e), "오류", "error")));
       qs("#runImageLabelingBtn")?.addEventListener("click", () => runLabelingStage("image").catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#relabelImageLabelingBtn")?.addEventListener("click", () => runLabelingStage("image", { relabelExisting: true }).catch((e) => showAlert(String(e), "오류", "error")));
       qs("#retryFailedLabelingBtn")?.addEventListener("click", () => retryFailedLabelingRun().catch((e) => showAlert(String(e), "오류", "error")));
       try { await refreshLabelingSection(); } catch (err) { showAlert(`초기 로딩 실패: ${String(err)}`, "오류", "error"); }
       startLabelingPolling();
@@ -1744,6 +1903,14 @@
       });
       qs("#writerBoardBulkPublishBtn")?.addEventListener("click", () => bulkPublishWriterBoardArticles().catch((e) => showAlert(String(e), "오류", "error")));
       qs("#writerBoardBulkStatusBtn")?.addEventListener("click", () => bulkUpdateWriterBoardStatus().catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#writerArticleSaveBtn")?.addEventListener("click", () => saveWriterArticleEditor().catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#writerArticleRegenerateBtn")?.addEventListener("click", () => regenerateWriterArticle(state.writerEditingArticleId).catch((e) => showAlert(String(e), "오류", "error")));
+      qs("#writerArticleCloseBtn")?.addEventListener("click", () => closeWriterArticleEditor());
+      qs("#writerArticleCloseX")?.addEventListener("click", () => closeWriterArticleEditor());
+      qs("#writerArticleBackdrop")?.addEventListener("click", () => closeWriterArticleEditor());
+      qs("#writerArticleViewCloseBtn")?.addEventListener("click", () => closeWriterArticleViewer());
+      qs("#writerArticleViewCloseX")?.addEventListener("click", () => closeWriterArticleViewer());
+      qs("#writerArticleViewBackdrop")?.addEventListener("click", () => closeWriterArticleViewer());
       qs("#writerBoardSearch")?.addEventListener("input", (e) => {
         state.writerBoardSearch = String(e.target.value || "");
         state.writerBoardPage = 1;
@@ -1859,7 +2026,7 @@
         state.collectSettingCategorySearch = String(e.target.value || "");
         renderCollectChecklist("category");
       });
-      ["#collectSettingInterval", "#collectSettingMaxResults", "#collectSettingTimeout", "#collectSettingRetry", "#collectSettingNaverRelated"]
+      ["#collectSettingInterval", "#collectSettingMaxResults", "#collectSettingTimeout", "#collectSettingRetry", "#collectSettingAutoRelatedSync"]
         .forEach((sel) => qs(sel)?.addEventListener("change", () => refreshCollectSettingHints()));
       qsa("input[name='collectSettingScope']").forEach((node) => node.addEventListener("change", () => refreshCollectSettingHints()));
       qs("#collectSettingResetBtn")?.addEventListener("click", () => {
@@ -1868,9 +2035,11 @@
         qs("#collectSettingMaxResults").value = 3;
         qs("#collectSettingTimeout").value = 15;
         qs("#collectSettingRetry").value = 1;
-        qs("#collectSettingNaverRelated").checked = true;
+        qs("#collectSettingAutoRelatedSync").checked = false;
+        state.collectSettingKeywordSourceCodes = ["google_suggest", "naver"];
         state.collectSettingChannelCodes = [];
         state.collectSettingCategoryIds = [];
+        renderKeywordSourceChecklist();
         renderCollectChecklist("channel");
         renderCollectChecklist("category");
         refreshCollectSettingHints();

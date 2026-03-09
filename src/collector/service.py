@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collector.manager import collector_manager
-from core.related_keyword_service import related_keyword_service
+from keyword_engine.service import keyword_engine_service
 from storage.repositories import CrawlRepository, KeywordRepository, SourceChannelRepository
 
 
@@ -11,6 +11,7 @@ class CrawlService:
         keyword_id: int,
         max_results: int = 3,
         sync_related: bool = True,
+        related_source_codes: list[str] | None = None,
         allowed_channels: list[str] | None = None,
     ) -> list[str]:
         messages: list[str] = []
@@ -45,13 +46,15 @@ class CrawlService:
 
         if sync_related:
             try:
-                related_count = related_keyword_service.sync_from_naver(
+                related_result = keyword_engine_service.sync_related_keywords(
                     source_keyword_id=keyword_id,
                     source_keyword=target.keyword,
                     category_id=target.category_id,
+                    enabled_sources=related_source_codes,
                 )
-                if related_count > 0:
-                    messages.append(f"연관키워드(네이버) 반영: {related_count}건")
+                if related_result.total_applied > 0:
+                    detail = ", ".join(f"{code}:{count}" for code, count in sorted(related_result.by_source.items()))
+                    messages.append(f"연관키워드 반영: {related_result.total_applied}건" + (f" ({detail})" if detail else ""))
             except Exception as exc:
                 messages.append(f"연관키워드 반영 실패: {exc}")
 

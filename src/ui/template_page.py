@@ -73,7 +73,7 @@ class TemplatePage(QWidget):
 
         self.template_prompt = QTextEdit()
         self.template_prompt.setPlaceholderText(
-            "예시:\n# {{keyword}} 글 초안\n\n페르소나: {{persona_name}}\n연령: {{persona_age_group}}\n성별: {{persona_gender}}\n성격: {{persona_personality}}\n말투: {{persona_speech_style}}\n\n핵심 소스:\n{{source_summary}}"
+            "예시:\n# {{keyword}} 글 초안\n\n페르소나: {{persona_name}}\n연령: {{persona_age_group}}\n성별: {{persona_gender}}\n성격: {{persona_personality}}\n말투: {{persona_speech_style}}\n\nSEO 전략:\n{{seo_strategy}}\n\nSEO 정량 가이드:\n{{seo_metrics}}\n\n원문 개요:\n{{source_outline}}\n\n이미지 계획:\n{{image_plan}}\n\n이미지 슬롯:\n{{image_slots}}"
         )
         layout.addWidget(QLabel("사용자 프롬프트 템플릿"))
         layout.addWidget(self.template_prompt, 1)

@@ -1,4 +1,6 @@
-# BlogWriter
+# MubloOps
+
+MubloOps는 Mublo 프레임워크 기반의 콘텐츠 운영 데스크톱 앱입니다. 수집, 라벨링, 글 작성, 발행 파이프라인을 한곳에서 운영하는 것을 목표로 합니다.
 
 ## 실행 방법
 1. 가상환경 생성/활성화
@@ -10,7 +12,7 @@
 
 ## 현재 디렉토리 구조
 ```text
-blogWriter/
+MubloOps/
 ├─ docs/
 ├─ migrations/
 ├─ src/
@@ -37,7 +39,7 @@ blogWriter/
 - 로그/모니터링: 실행 로그, 실패 로그, 재시도 큐
 
 ## DB 초기화
-- 앱 실행 시 SQLite DB(`blogwriter_data/blogwriter.db`) 자동 생성
+- 신규 설치는 SQLite DB(`mublo_ops_data/mublo_ops.db`) 자동 생성
 - 필요 시 마이그레이션 실행
   - `set PYTHONPATH=src`
   - `alembic upgrade head`

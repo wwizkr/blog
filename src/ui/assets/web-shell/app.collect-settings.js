@@ -32,9 +32,12 @@
         max_results: Number(qs("#collectSettingMaxResults").value || 3),
         request_timeout: Number(qs("#collectSettingTimeout").value || 15),
         retry_count: Number(qs("#collectSettingRetry").value || 1),
+        browser_fetch_mode: String(qs("#collectSettingBrowserFetchMode").value || "selenium"),
+        browser_headless: !!qs("#collectSettingBrowserHeadless").checked,
+        auto_related_sync: !!qs("#collectSettingAutoRelatedSync").checked,
         selected_channel_codes: state.collectSettingChannelCodes,
         selected_category_ids: state.collectSettingCategoryIds,
-        naver_related_sync: !!qs("#collectSettingNaverRelated").checked,
+        keyword_source_codes: state.collectSettingKeywordSourceCodes || [],
       };
     }
 
@@ -45,6 +48,7 @@
       if (payload.max_results < 1 || payload.max_results > 20) errors.push("키워드당 최대 수집은 1~20 범위여야 합니다.");
       if (payload.request_timeout < 3 || payload.request_timeout > 120) errors.push("타임아웃(초)는 3~120 범위여야 합니다.");
       if (payload.retry_count < 0 || payload.retry_count > 5) errors.push("재시도(회)는 0~5 범위여야 합니다.");
+      if ((payload.keyword_source_codes || []).length < 1) errors.push("키워드 소스를 1개 이상 선택해야 합니다.");
       return errors;
     }
 
@@ -58,9 +62,12 @@
         max_results: Number(p.max_results || 3),
         request_timeout: Number(p.request_timeout || 15),
         retry_count: Number(p.retry_count || 1),
+        browser_fetch_mode: String(p.browser_fetch_mode || "selenium"),
+        browser_headless: !!p.browser_headless,
+        auto_related_sync: !!p.auto_related_sync,
         selected_channel_codes: channelCodes,
         selected_category_ids: categoryIds,
-        naver_related_sync: !!p.naver_related_sync,
+        keyword_source_codes: [...new Set((p.keyword_source_codes || []).map((v) => String(v)))].sort(),
       };
     }
 
@@ -73,7 +80,10 @@
       if (prev.max_results !== next.max_results) lines.push(`최대 수집: ${prev.max_results} -> ${next.max_results}`);
       if (prev.request_timeout !== next.request_timeout) lines.push(`타임아웃: ${prev.request_timeout} -> ${next.request_timeout}`);
       if (prev.retry_count !== next.retry_count) lines.push(`재시도: ${prev.retry_count} -> ${next.retry_count}`);
-      if (prev.naver_related_sync !== next.naver_related_sync) lines.push(`네이버 연관 동기화: ${prev.naver_related_sync ? "Y" : "N"} -> ${next.naver_related_sync ? "Y" : "N"}`);
+      if (prev.browser_fetch_mode !== next.browser_fetch_mode) lines.push(`수집 방식: ${prev.browser_fetch_mode} -> ${next.browser_fetch_mode}`);
+      if (prev.browser_headless !== next.browser_headless) lines.push(`브라우저 숨김: ${prev.browser_headless ? "Y" : "N"} -> ${next.browser_headless ? "Y" : "N"}`);
+      if (prev.auto_related_sync !== next.auto_related_sync) lines.push(`수집시 연관확장: ${prev.auto_related_sync ? "Y" : "N"} -> ${next.auto_related_sync ? "Y" : "N"}`);
+      if (prev.keyword_source_codes.join(",") !== next.keyword_source_codes.join(",")) lines.push(`키워드 소스: ${prev.keyword_source_codes.join(",") || "-"} -> ${next.keyword_source_codes.join(",") || "-"}`);
       if (prev.selected_channel_codes.join(",") !== next.selected_channel_codes.join(",")) {
         lines.push(`선택 채널: ${prev.selected_channel_codes.length} -> ${next.selected_channel_codes.length}`);
       }
@@ -92,6 +102,38 @@
       if (diffNode) diffNode.textContent = diff.length ? `변경사항: ${diff.join(" | ")}` : "변경사항 없음";
       const saveBtn = qs("#collectSettingSaveBtn");
       if (saveBtn) saveBtn.disabled = errors.length > 0;
+    }
+
+    function renderKeywordSourceChecklist() {
+      const wrap = qs("#collectKeywordSourceChecklist");
+      if (!wrap) return;
+      wrap.innerHTML = "";
+      const rows = state.collectSettingKeywordSources || [];
+      const selected = new Set((state.collectSettingKeywordSourceCodes || []).map((v) => String(v)));
+      if (!rows.length) {
+        wrap.innerHTML = "<div class='check-empty'>소스 없음</div>";
+        return;
+      }
+      rows.forEach((row) => {
+        const item = document.createElement("label");
+        item.className = "check-item";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = String(row.code);
+        input.checked = selected.has(String(row.code));
+        input.addEventListener("change", () => {
+          const next = new Set((state.collectSettingKeywordSourceCodes || []).map((v) => String(v)));
+          if (input.checked) next.add(String(row.code));
+          else next.delete(String(row.code));
+          state.collectSettingKeywordSourceCodes = [...next].sort();
+          refreshCollectSettingHints();
+        });
+        const text = document.createElement("span");
+        text.textContent = row.label || row.code;
+        item.appendChild(input);
+        item.appendChild(text);
+        wrap.appendChild(item);
+      });
     }
 
     function updateCollectChecklistMeta(kind) {
@@ -198,15 +240,20 @@
       state.collectSettingCategories = categories || [];
       state.collectSettingChannelCodes = (s.selected_channel_codes || []).map((v) => String(v));
       state.collectSettingCategoryIds = (s.selected_category_ids || []).map((v) => Number(v)).filter((v) => Number.isFinite(v));
+      state.collectSettingKeywordSources = s.available_keyword_sources || [];
+      state.collectSettingKeywordSourceCodes = (s.keyword_source_codes || []).map((v) => String(v));
       state.collectSettingsSnapshot = normalizeCollectSettingSnapshot({
         keyword_scope: s.keyword_scope || "selected",
         interval_minutes: s.interval_minutes || 60,
         max_results: s.max_results || 3,
         request_timeout: s.request_timeout || 15,
         retry_count: s.retry_count || 1,
+        browser_fetch_mode: s.browser_fetch_mode || "selenium",
+        browser_headless: !!s.browser_headless,
+        auto_related_sync: !!s.auto_related_sync,
         selected_channel_codes: state.collectSettingChannelCodes,
         selected_category_ids: state.collectSettingCategoryIds,
-        naver_related_sync: !!s.naver_related_sync,
+        keyword_source_codes: state.collectSettingKeywordSourceCodes,
       });
 
       setCollectScopeValue(s.keyword_scope || "selected");
@@ -214,8 +261,11 @@
       qs("#collectSettingMaxResults").value = s.max_results || 3;
       qs("#collectSettingTimeout").value = s.request_timeout || 15;
       qs("#collectSettingRetry").value = s.retry_count || 1;
-      qs("#collectSettingNaverRelated").checked = !!s.naver_related_sync;
+      qs("#collectSettingBrowserFetchMode").value = s.browser_fetch_mode || "selenium";
+      qs("#collectSettingBrowserHeadless").checked = !!s.browser_headless;
+      qs("#collectSettingAutoRelatedSync").checked = !!s.auto_related_sync;
 
+      renderKeywordSourceChecklist();
       renderCollectChecklist("channel");
       renderCollectChecklist("category");
       refreshCollectSettingHints();
@@ -249,6 +299,7 @@
       normalizeCollectSettingSnapshot,
       collectSettingDiffLines,
       refreshCollectSettingHints,
+      renderKeywordSourceChecklist,
       updateCollectChecklistMeta,
       renderCollectChecklist,
       toggleCollectChecklistAll,

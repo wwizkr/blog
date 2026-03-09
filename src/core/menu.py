@@ -34,7 +34,7 @@ def build_primary_menu() -> tuple[MenuNode, ...]:
                 _node("writer.run", "글 작성 실행"),
                 _node("writer.persona", "페르소나 관리"),
                 _node("writer.template", "템플릿 관리"),
-                _node("writer.ai", "AI API 관리"),
+                _node("writer.ai", "AI 설정"),
                 _node("writer.editor", "작성 결과/에디터"),
             ),
         ),

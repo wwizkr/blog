@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse, urlunp
 import requests
 from bs4 import BeautifulSoup, Tag
 
+from collector.browser import browser_html_fetcher
+
 
 class BaseCollector(ABC):
     channel_code: str
@@ -30,12 +32,46 @@ class BaseCollector(ABC):
         return self.channel_code, self.display_name
 
     def _fetch_html(self, url: str, timeout: int = 12) -> str | None:
+        fetch_mode = self._get_fetch_mode()
+        if fetch_mode == "selenium":
+            html = browser_html_fetcher.fetch_html(
+                url,
+                headless=self._is_browser_headless(),
+                timeout=timeout,
+            )
+            if html:
+                return html
+        return self._fetch_html_requests(url=url, timeout=timeout)
+
+    def _fetch_html_requests(self, url: str, timeout: int = 12) -> str | None:
         try:
             response = requests.get(url, timeout=timeout, headers={"User-Agent": self.user_agent})
             response.raise_for_status()
             return response.text
         except Exception:
             return None
+
+    def _get_fetch_mode(self) -> str:
+        try:
+            from core.settings_keys import CollectSettingKeys
+            from storage.repositories import AppSettingRepository
+
+            mode = str(AppSettingRepository.get_value(CollectSettingKeys.BROWSER_FETCH_MODE, "selenium") or "selenium").strip().lower()
+            if mode in {"requests", "selenium"}:
+                return mode
+        except Exception:
+            pass
+        return "selenium"
+
+    def _is_browser_headless(self) -> bool:
+        try:
+            from core.settings_keys import CollectSettingKeys
+            from storage.repositories import AppSettingRepository
+
+            raw = AppSettingRepository.get_value(CollectSettingKeys.BROWSER_HEADLESS, "0")
+            return str(raw or "").strip().lower() in {"1", "true", "y", "yes", "on"}
+        except Exception:
+            return False
 
     def _is_domain_url(self, href: str, domain: str) -> bool:
         try:

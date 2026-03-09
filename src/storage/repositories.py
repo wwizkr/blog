@@ -14,6 +14,7 @@ import json
 from bs4 import BeautifulSoup
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from core.settings import settings
 from core.settings_keys import LabelSettingKeys
@@ -30,8 +31,9 @@ from storage.models import (
     ImageLabel,
     LabelingRunLog,
     Keyword,
-    KeywordRelatedBlock,
     KeywordRelatedRelation,
+    KeywordSeoProfile,
+    KeywordSeoProfileRun,
     Persona,
     PublishJob,
     PublishChannel,
@@ -143,6 +145,26 @@ def _safe_int(value, default: int = 0) -> int:
         return int(default)
 
 
+def _safe_json_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _safe_json_object(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @dataclass
 class CategoryDTO:
     id: int
@@ -171,16 +193,11 @@ class KeywordRelatedDTO:
     source_keyword_id: int
     related_keyword_id: int
     related_keyword: str
+    is_active: bool
+    source_type: str
     collect_count: int
     created_at: datetime
     last_seen_at: datetime
-
-@dataclass
-class KeywordRelatedBlockDTO:
-    block_id: int
-    source_keyword_id: int
-    related_keyword: str
-    created_at: datetime
 
 @dataclass
 class SourceChannelDTO:
@@ -215,11 +232,37 @@ class CrawlJobDTO:
 @dataclass
 class RawContentDTO:
     id: int
+    keyword_id: int | None
     keyword: str | None
     channel_code: str
     title: str
+    body_text: str | None
+    body_html: str | None
     source_url: str
+    author: str | None
+    images: list["RawImageDTO"] | None
     created_at: datetime
+
+
+@dataclass
+class KeywordSeoProfileDTO:
+    keyword_id: int
+    sample_count: int
+    avg_title_length: int
+    avg_body_length: int
+    avg_heading_count: int
+    avg_image_count: int
+    avg_list_count: int
+    dominant_format: str | None
+    common_sections: list[str]
+    common_terms: list[str]
+    recommended_length_min: int | None
+    recommended_length_max: int | None
+    recommended_heading_count: int | None
+    recommended_image_count: int | None
+    summary_text: str | None
+    analysis_basis: dict
+    analyzed_at: datetime | None
 
 
 @dataclass
@@ -229,7 +272,16 @@ class RawImageDTO:
     image_url: str
     source_url: str
     page_url: str | None
+    local_path: str | None
+    local_url: str | None
     created_at: datetime
+    image_type: str | None = None
+    subject_tags: list[str] | None = None
+    commercial_intent: int = 0
+    keyword_relevance_score: int = 0
+    thumbnail_score: int = 0
+    text_overlay: bool = False
+    is_thumbnail_candidate: bool = False
 
 
 @dataclass
@@ -554,20 +606,6 @@ class KeywordRepository:
             return row is not None
 
     @staticmethod
-    def is_blocked_related(source_keyword_id: int, related_keyword: str) -> bool:
-        cleaned = related_keyword.strip()
-        if not cleaned:
-            return True
-        with session_scope() as session:
-            row = session.execute(
-                select(KeywordRelatedBlock).where(
-                    KeywordRelatedBlock.source_keyword_id == source_keyword_id,
-                    KeywordRelatedBlock.related_keyword == cleaned,
-                )
-            ).scalar_one_or_none()
-            return row is not None
-
-    @staticmethod
     def upsert_related_relation(source_keyword_id: int, related_keyword_id: int, source_type: str = "content") -> None:
         if source_keyword_id == related_keyword_id:
             return
@@ -611,6 +649,8 @@ class KeywordRepository:
                         source_keyword_id=row.source_keyword_id,
                         related_keyword_id=row.related_keyword_id,
                         related_keyword=related.keyword,
+                        is_active=bool(related.is_active),
+                        source_type=row.source_type,
                         collect_count=row.collect_count,
                         created_at=row.created_at,
                         last_seen_at=row.last_seen_at,
@@ -618,68 +658,133 @@ class KeywordRepository:
                 )
             return result
 
-    @staticmethod
-    def list_related_blocks(source_keyword_id: int) -> list[KeywordRelatedBlockDTO]:
-        with session_scope() as session:
-            rows = session.execute(
-                select(KeywordRelatedBlock)
-                .where(KeywordRelatedBlock.source_keyword_id == source_keyword_id)
-                .order_by(KeywordRelatedBlock.created_at.desc())
-            ).scalars().all()
-            return [
-                KeywordRelatedBlockDTO(
-                    block_id=row.id,
-                    source_keyword_id=row.source_keyword_id,
-                    related_keyword=row.related_keyword,
-                    created_at=row.created_at,
-                )
-                for row in rows
-            ]
 
+class KeywordSeoProfileRepository:
     @staticmethod
-    def unblock_related_block(block_id: int) -> None:
+    def get_by_keyword_id(keyword_id: int) -> KeywordSeoProfileDTO | None:
         with session_scope() as session:
-            target = session.get(KeywordRelatedBlock, block_id)
-            if target:
-                session.delete(target)
-
-    @staticmethod
-    def block_and_remove_related(source_keyword_id: int, related_keyword_id: int) -> None:
-        with session_scope() as session:
-            related = session.get(Keyword, related_keyword_id)
-            if not related:
-                return
-
-            block_exists = session.execute(
-                select(KeywordRelatedBlock).where(
-                    KeywordRelatedBlock.source_keyword_id == source_keyword_id,
-                    KeywordRelatedBlock.related_keyword == related.keyword,
-                )
+            row = session.execute(
+                select(KeywordSeoProfile).where(KeywordSeoProfile.keyword_id == keyword_id)
             ).scalar_one_or_none()
-            if not block_exists:
+            if not row:
+                return None
+            return KeywordSeoProfileDTO(
+                keyword_id=row.keyword_id,
+                sample_count=int(row.sample_count or 0),
+                avg_title_length=int(row.avg_title_length or 0),
+                avg_body_length=int(row.avg_body_length or 0),
+                avg_heading_count=int(row.avg_heading_count or 0),
+                avg_image_count=int(row.avg_image_count or 0),
+                avg_list_count=int(row.avg_list_count or 0),
+                dominant_format=row.dominant_format,
+                common_sections=_safe_json_list(row.common_sections_json),
+                common_terms=_safe_json_list(row.common_terms_json),
+                recommended_length_min=row.recommended_length_min,
+                recommended_length_max=row.recommended_length_max,
+                recommended_heading_count=row.recommended_heading_count,
+                recommended_image_count=row.recommended_image_count,
+                summary_text=row.summary_text,
+                analysis_basis=_safe_json_object(row.analysis_basis_json),
+                analyzed_at=row.analyzed_at,
+            )
+
+    @staticmethod
+    def upsert(
+        *,
+        keyword_id: int,
+        sample_count: int,
+        avg_title_length: int,
+        avg_body_length: int,
+        avg_heading_count: int,
+        avg_image_count: int,
+        avg_list_count: int,
+        dominant_format: str | None,
+        common_sections: list[str],
+        common_terms: list[str],
+        recommended_length_min: int | None,
+        recommended_length_max: int | None,
+        recommended_heading_count: int | None,
+        recommended_image_count: int | None,
+        summary_text: str | None,
+        analysis_basis: dict,
+        source_content_ids: list[int],
+    ) -> None:
+        now = datetime.utcnow()
+        with session_scope() as session:
+            row = session.execute(
+                select(KeywordSeoProfile).where(KeywordSeoProfile.keyword_id == keyword_id)
+            ).scalar_one_or_none()
+            payload_sections = json.dumps(common_sections[:20], ensure_ascii=False)
+            payload_terms = json.dumps(common_terms[:30], ensure_ascii=False)
+            payload_basis = json.dumps(analysis_basis, ensure_ascii=False)
+            if row:
+                row.sample_count = max(0, int(sample_count or 0))
+                row.avg_title_length = max(0, int(avg_title_length or 0))
+                row.avg_body_length = max(0, int(avg_body_length or 0))
+                row.avg_heading_count = max(0, int(avg_heading_count or 0))
+                row.avg_image_count = max(0, int(avg_image_count or 0))
+                row.avg_list_count = max(0, int(avg_list_count or 0))
+                row.dominant_format = (dominant_format or "").strip() or None
+                row.common_sections_json = payload_sections
+                row.common_terms_json = payload_terms
+                row.recommended_length_min = recommended_length_min
+                row.recommended_length_max = recommended_length_max
+                row.recommended_heading_count = recommended_heading_count
+                row.recommended_image_count = recommended_image_count
+                row.summary_text = (summary_text or "").strip() or None
+                row.analysis_basis_json = payload_basis
+                row.analyzed_at = now
+                row.updated_at = now
+            else:
                 session.add(
-                    KeywordRelatedBlock(
-                        source_keyword_id=source_keyword_id,
-                        related_keyword=related.keyword,
+                    KeywordSeoProfile(
+                        keyword_id=keyword_id,
+                        sample_count=max(0, int(sample_count or 0)),
+                        avg_title_length=max(0, int(avg_title_length or 0)),
+                        avg_body_length=max(0, int(avg_body_length or 0)),
+                        avg_heading_count=max(0, int(avg_heading_count or 0)),
+                        avg_image_count=max(0, int(avg_image_count or 0)),
+                        avg_list_count=max(0, int(avg_list_count or 0)),
+                        dominant_format=(dominant_format or "").strip() or None,
+                        common_sections_json=payload_sections,
+                        common_terms_json=payload_terms,
+                        recommended_length_min=recommended_length_min,
+                        recommended_length_max=recommended_length_max,
+                        recommended_heading_count=recommended_heading_count,
+                        recommended_image_count=recommended_image_count,
+                        summary_text=(summary_text or "").strip() or None,
+                        analysis_basis_json=payload_basis,
+                        analyzed_at=now,
+                        created_at=now,
+                        updated_at=now,
                     )
                 )
-
-            relation = session.execute(
-                select(KeywordRelatedRelation).where(
-                    KeywordRelatedRelation.source_keyword_id == source_keyword_id,
-                    KeywordRelatedRelation.related_keyword_id == related_keyword_id,
+            session.add(
+                KeywordSeoProfileRun(
+                    keyword_id=keyword_id,
+                    sample_count=max(0, int(sample_count or 0)),
+                    summary_text=(summary_text or "").strip() or None,
+                    metrics_json=json.dumps(
+                        {
+                            "avg_title_length": avg_title_length,
+                            "avg_body_length": avg_body_length,
+                            "avg_heading_count": avg_heading_count,
+                            "avg_image_count": avg_image_count,
+                            "avg_list_count": avg_list_count,
+                            "dominant_format": dominant_format,
+                            "recommended_length_min": recommended_length_min,
+                            "recommended_length_max": recommended_length_max,
+                            "recommended_heading_count": recommended_heading_count,
+                            "recommended_image_count": recommended_image_count,
+                            "common_sections": common_sections[:20],
+                            "common_terms": common_terms[:30],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    source_content_ids_json=json.dumps(source_content_ids[:100], ensure_ascii=False),
+                    created_at=now,
                 )
-            ).scalar_one_or_none()
-            if relation:
-                session.delete(relation)
-
-            related_ref_count = session.execute(
-                select(func.count()).select_from(KeywordRelatedRelation).where(
-                    KeywordRelatedRelation.related_keyword_id == related_keyword_id
-                )
-            ).scalar_one()
-            if int(related_ref_count or 0) == 0 and related.is_auto_generated:
-                related.is_active = False
+            )
 
 class SourceChannelRepository:
     @staticmethod
@@ -717,6 +822,67 @@ class SourceChannelRepository:
 
 
 class CrawlRepository:
+    @staticmethod
+    def _writer_image_local_url(image_id: int, local_path: str | None) -> str | None:
+        if not image_id or not str(local_path or "").strip():
+            return None
+        return f"/api/collected/images/{int(image_id)}/file"
+
+    @staticmethod
+    def _build_writer_content_dtos(rows: list[RawContent]) -> list[RawContentDTO]:
+        if not rows:
+            return []
+        content_ids = [int(row.id) for row in rows]
+        with session_scope() as session:
+            image_rows = session.execute(
+                select(RawImage, ImageLabel)
+                .outerjoin(ImageLabel, ImageLabel.image_id == RawImage.id)
+                .where(RawImage.content_id.in_(content_ids))
+                .order_by(
+                    RawImage.content_id.asc(),
+                    ImageLabel.is_thumbnail_candidate.desc().nullslast(),
+                    ImageLabel.thumbnail_score.desc().nullslast(),
+                    RawImage.created_at.asc(),
+                )
+            ).all()
+        image_map: dict[int, list[RawImageDTO]] = {}
+        for raw_image, image_label in image_rows:
+            image_map.setdefault(int(raw_image.content_id), []).append(
+                RawImageDTO(
+                    id=raw_image.id,
+                    content_id=raw_image.content_id,
+                    image_url=raw_image.image_url,
+                    source_url=raw_image.source_url,
+                    page_url=raw_image.page_url,
+                    local_path=raw_image.local_path,
+                    local_url=CrawlRepository._writer_image_local_url(raw_image.id, raw_image.local_path),
+                    image_type=getattr(image_label, "image_type", None),
+                    subject_tags=_safe_json_list(getattr(image_label, "subject_tags", None)),
+                    commercial_intent=int(getattr(image_label, "commercial_intent", 0) or 0),
+                    keyword_relevance_score=int(getattr(image_label, "keyword_relevance_score", 0) or 0),
+                    thumbnail_score=int(getattr(image_label, "thumbnail_score", 0) or 0),
+                    text_overlay=bool(getattr(image_label, "text_overlay", False)),
+                    is_thumbnail_candidate=bool(getattr(image_label, "is_thumbnail_candidate", False)),
+                    created_at=raw_image.created_at,
+                )
+            )
+        return [
+            RawContentDTO(
+                id=row.id,
+                keyword_id=row.keyword_id,
+                keyword=row.keyword.keyword if row.keyword else None,
+                channel_code=row.channel_code,
+                title=row.title,
+                body_text=(row.body_text or None),
+                body_html=(row.body_html or None),
+                source_url=row.source_url,
+                author=(row.author or None),
+                images=image_map.get(int(row.id), []),
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
     @staticmethod
     def create_job(keyword_id: int, channel_code: str) -> int:
         with session_scope() as session:
@@ -930,8 +1096,10 @@ class CrawlRepository:
                 if channel_code == "naver_blog" and body_html:
                     body_html = CrawlRepository._normalize_naver_body_html_images(body_html)
                 body_text = str(row.get("body_text") or "").strip()
-                payload_body = body_html or body_text
-                if not payload_body:
+                if not body_text and body_html:
+                    body_text = BeautifulSoup(body_html, "html.parser").get_text(" ", strip=True)
+                    body_text = re.sub(r"\s+", " ", body_text).strip()
+                if not body_text:
                     continue
 
                 item = RawContent(
@@ -939,7 +1107,8 @@ class CrawlRepository:
                     category_id=category_id,
                     channel_code=channel_code,
                     title=str(row.get("title") or "")[:500] or "(제목없음)",
-                    body_text=payload_body,
+                    body_text=body_text,
+                    body_html=body_html or None,
                     source_url=source_url,
                     author=(str(row.get("author") or "").strip() or None),
                 )
@@ -990,17 +1159,75 @@ class CrawlRepository:
     def list_recent_contents(limit: int = 50) -> list[RawContentDTO]:
         with session_scope() as session:
             rows = session.execute(select(RawContent).order_by(RawContent.created_at.desc()).limit(limit)).scalars().all()
-            return [
-                RawContentDTO(
-                    id=row.id,
-                    keyword=row.keyword.keyword if row.keyword else None,
-                    channel_code=row.channel_code,
-                    title=row.title,
-                    source_url=row.source_url,
-                    created_at=row.created_at,
+            return CrawlRepository._build_writer_content_dtos(rows)
+
+    @staticmethod
+    def list_recent_contents_for_writer(limit: int = 50) -> list[RawContentDTO]:
+        with session_scope() as session:
+            rows = session.execute(
+                select(RawContent)
+                .outerjoin(ContentLabel, ContentLabel.content_id == RawContent.id)
+                .order_by(
+                    ContentLabel.writing_fit_score.desc().nullslast(),
+                    ContentLabel.quality_score.desc().nullslast(),
+                    ContentLabel.commercial_intent.asc().nullslast(),
+                    RawContent.created_at.desc(),
                 )
-                for row in rows
-            ]
+                .limit(limit)
+            ).scalars().all()
+            return CrawlRepository._build_writer_content_dtos(rows)
+
+    @staticmethod
+    def get_contents_by_ids(content_ids: list[int]) -> list[RawContentDTO]:
+        ids: list[int] = []
+        for value in content_ids or []:
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return []
+        with session_scope() as session:
+            rows = session.execute(select(RawContent).where(RawContent.id.in_(ids))).scalars().all()
+            mapping = {int(row.id): row for row in CrawlRepository._build_writer_content_dtos(rows)}
+            return [mapping[row_id] for row_id in ids if row_id in mapping]
+
+    @staticmethod
+    def get_images_by_ids(image_ids: list[int]) -> list[RawImageDTO]:
+        ids: list[int] = []
+        for value in image_ids or []:
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return []
+        with session_scope() as session:
+            rows = session.execute(
+                select(RawImage, ImageLabel)
+                .outerjoin(ImageLabel, ImageLabel.image_id == RawImage.id)
+                .where(RawImage.id.in_(ids))
+            ).all()
+        mapping: dict[int, RawImageDTO] = {}
+        for raw_image, image_label in rows:
+            mapping[int(raw_image.id)] = RawImageDTO(
+                id=raw_image.id,
+                content_id=raw_image.content_id,
+                image_url=raw_image.image_url,
+                source_url=raw_image.source_url,
+                page_url=raw_image.page_url,
+                local_path=raw_image.local_path,
+                local_url=CrawlRepository._writer_image_local_url(raw_image.id, raw_image.local_path),
+                created_at=raw_image.created_at,
+                image_type=getattr(image_label, "image_type", None),
+                subject_tags=_safe_json_list(getattr(image_label, "subject_tags", None)),
+                commercial_intent=int(getattr(image_label, "commercial_intent", 0) or 0),
+                keyword_relevance_score=int(getattr(image_label, "keyword_relevance_score", 0) or 0),
+                thumbnail_score=int(getattr(image_label, "thumbnail_score", 0) or 0),
+                text_overlay=bool(getattr(image_label, "text_overlay", False)),
+                is_thumbnail_candidate=bool(getattr(image_label, "is_thumbnail_candidate", False)),
+            )
+        return [mapping[row_id] for row_id in ids if row_id in mapping]
 
     @staticmethod
     def list_unlabeled_contents(limit: int = 200) -> list[RawContent]:
@@ -1014,15 +1241,22 @@ class CrawlRepository:
             return rows
 
     @staticmethod
-    def list_unlabeled_images(limit: int = 500) -> list[RawImage]:
+    def list_images_for_labeling(limit: int = 500, include_completed: bool = False) -> list[RawImage]:
         with session_scope() as session:
-            rows = session.execute(
+            stmt = (
                 select(RawImage)
-                .where(RawImage.label_status == "pending")
+                .options(selectinload(RawImage.content).selectinload(RawContent.keyword))
                 .order_by(RawImage.created_at.desc())
                 .limit(limit)
-            ).scalars().all()
+            )
+            if not include_completed:
+                stmt = stmt.where(RawImage.label_status == "pending")
+            rows = session.execute(stmt).scalars().all()
             return rows
+
+    @staticmethod
+    def list_unlabeled_images(limit: int = 500) -> list[RawImage]:
+        return CrawlRepository.list_images_for_labeling(limit=limit, include_completed=False)
 
 
 class LabelRepository:
@@ -1033,6 +1267,12 @@ class LabelRepository:
         sentiment: str | None,
         topics: list[str],
         quality_score: int,
+        structure_type: str | None = None,
+        title_type: str | None = None,
+        commercial_intent: int = 0,
+        writing_fit_score: int = 0,
+        cta_present: bool = False,
+        faq_structure: bool = False,
         label_method: str = "rule",
     ) -> None:
         normalized_tone = _normalize_content_tone(tone)
@@ -1045,6 +1285,12 @@ class LabelRepository:
                 existing.tone = normalized_tone
                 existing.sentiment = normalized_sentiment
                 existing.topics = payload
+                existing.structure_type = (str(structure_type or "").strip() or None)
+                existing.title_type = (str(title_type or "").strip() or None)
+                existing.commercial_intent = max(0, min(5, int(commercial_intent or 0)))
+                existing.writing_fit_score = max(0, min(5, int(writing_fit_score or 0)))
+                existing.cta_present = bool(cta_present)
+                existing.faq_structure = bool(faq_structure)
                 existing.quality_score = quality_score
                 existing.label_method = str(label_method or "rule")[:20]
                 existing.labeled_at = datetime.utcnow()
@@ -1055,6 +1301,12 @@ class LabelRepository:
                     tone=normalized_tone,
                     sentiment=normalized_sentiment,
                     topics=payload,
+                    structure_type=(str(structure_type or "").strip() or None),
+                    title_type=(str(title_type or "").strip() or None),
+                    commercial_intent=max(0, min(5, int(commercial_intent or 0))),
+                    writing_fit_score=max(0, min(5, int(writing_fit_score or 0))),
+                    cta_present=bool(cta_present),
+                    faq_structure=bool(faq_structure),
                     quality_score=quality_score,
                     label_method=str(label_method or "rule")[:20],
                 )
@@ -1067,15 +1319,28 @@ class LabelRepository:
         mood: str | None,
         quality_score: int,
         is_thumbnail_candidate: bool,
+        image_type: str | None = None,
+        subject_tags: list[str] | None = None,
+        commercial_intent: int = 0,
+        keyword_relevance_score: int = 0,
+        text_overlay: bool = False,
+        thumbnail_score: int = 0,
         label_method: str = "rule",
     ) -> None:
         normalized_category = _normalize_image_category(category)
         normalized_mood = _normalize_image_mood(mood)
+        payload = [str(item).strip() for item in (subject_tags or []) if str(item).strip()][:12]
         with session_scope() as session:
             existing = session.execute(select(ImageLabel).where(ImageLabel.image_id == image_id)).scalar_one_or_none()
             if existing:
                 existing.category = normalized_category
                 existing.mood = normalized_mood
+                existing.image_type = (str(image_type or "").strip() or None)
+                existing.subject_tags = json.dumps(payload, ensure_ascii=False) if payload else None
+                existing.commercial_intent = max(0, min(5, int(commercial_intent or 0)))
+                existing.keyword_relevance_score = max(0, min(100, int(keyword_relevance_score or 0)))
+                existing.text_overlay = bool(text_overlay)
+                existing.thumbnail_score = max(0, min(100, int(thumbnail_score or 0)))
                 existing.quality_score = quality_score
                 existing.is_thumbnail_candidate = is_thumbnail_candidate
                 existing.label_method = str(label_method or "rule")[:20]
@@ -1086,6 +1351,12 @@ class LabelRepository:
                     image_id=image_id,
                     category=normalized_category,
                     mood=normalized_mood,
+                    image_type=(str(image_type or "").strip() or None),
+                    subject_tags=json.dumps(payload, ensure_ascii=False) if payload else None,
+                    commercial_intent=max(0, min(5, int(commercial_intent or 0))),
+                    keyword_relevance_score=max(0, min(100, int(keyword_relevance_score or 0))),
+                    text_overlay=bool(text_overlay),
+                    thumbnail_score=max(0, min(100, int(thumbnail_score or 0))),
                     quality_score=quality_score,
                     is_thumbnail_candidate=is_thumbnail_candidate,
                     label_method=str(label_method or "rule")[:20],
@@ -1632,6 +1903,9 @@ class ArticleRepository:
         template_id: int | None = None,
         template_name: str | None = None,
         template_version: int | None = None,
+        writing_channel_id: int | None = None,
+        ai_provider_id: int | None = None,
+        generation_meta: dict | None = None,
     ) -> int:
         with session_scope() as session:
             row = GeneratedArticle(
@@ -1643,8 +1917,11 @@ class ArticleRepository:
                 template_id=template_id,
                 template_name=template_name,
                 template_version=template_version,
+                writing_channel_id=writing_channel_id,
+                ai_provider_id=ai_provider_id,
                 status="draft",
                 source_content_ids=json.dumps(source_content_ids or []),
+                generation_meta_json=json.dumps(generation_meta or {}, ensure_ascii=False),
             )
             session.add(row)
             session.flush()
@@ -1658,6 +1935,40 @@ class ArticleRepository:
                 row.title = title[:500]
                 row.content = content
                 row.updated_at = datetime.utcnow()
+
+    @staticmethod
+    def replace_generated(
+        article_id: int,
+        title: str,
+        content: str,
+        persona_id: int | None = None,
+        persona_name: str | None = None,
+        template_id: int | None = None,
+        template_name: str | None = None,
+        template_version: int | None = None,
+        writing_channel_id: int | None = None,
+        ai_provider_id: int | None = None,
+        source_content_ids: list[int] | None = None,
+        generation_meta: dict | None = None,
+        status: str = "draft",
+    ) -> None:
+        with session_scope() as session:
+            row = session.get(GeneratedArticle, article_id)
+            if not row:
+                return
+            row.title = title[:500]
+            row.content = content
+            row.persona_id = persona_id
+            row.persona_name = persona_name
+            row.template_id = template_id
+            row.template_name = template_name
+            row.template_version = template_version
+            row.writing_channel_id = writing_channel_id
+            row.ai_provider_id = ai_provider_id
+            row.source_content_ids = json.dumps(source_content_ids or [])
+            row.generation_meta_json = json.dumps(generation_meta or {}, ensure_ascii=False)
+            row.status = status
+            row.updated_at = datetime.utcnow()
 
     @staticmethod
     def update_status(article_id: int, status: str) -> None:
@@ -1923,6 +2234,7 @@ class WritingChannelRepository:
                 )
                 for row in rows
             ]
+
 
     @staticmethod
     def get_by_id(channel_id: int) -> WritingChannel | None:

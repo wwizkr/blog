@@ -56,7 +56,15 @@
         }
         if (state.collectJobState[key] === sig) return;
         state.collectJobState[key] = sig;
-        appendCollectLogs([`작업 #${id} | ${job.keyword || "-"} | ${job.channel_code || "-"} | ${status || "-"} | 수집 ${collected}건`]);
+        let statusText = status || "-";
+        if (status === "running") {
+          statusText = "실행중 | 수집 진행중";
+        } else if (status === "completed") {
+          statusText = `완료 | 수집 ${collected}건`;
+        } else if (status === "failed") {
+          statusText = `실패 | 수집 ${collected}건`;
+        }
+        appendCollectLogs([`작업 #${id} | ${job.keyword || "-"} | ${job.channel_code || "-"} | ${statusText}`]);
       });
       persistCollectLogState();
     }

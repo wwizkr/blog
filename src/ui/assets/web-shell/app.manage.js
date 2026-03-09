@@ -196,7 +196,13 @@
         keyword: map.keyword || "샘플 키워드",
         persona_name: map.persona_name || "기본 페르소나",
         source_summary: map.source_summary || "샘플 요약 본문",
+        source_outline: map.source_outline || "1. 샘플 원문 제목 | 작성자: 운영자\n   - 요약: 핵심 내용을 짧게 정리합니다.",
+        image_plan: map.image_plan || "사용 가능한 로컬 이미지 후보 3장\n1. image_id=101 | source=샘플 원문 | score=88 | 텍스트없음",
+        image_slots: map.image_slots || "[[IMAGE:101]] - 대표 이미지 - 샘플 원문\n[[IMAGE:102]] - 본문 이미지 1 - 샘플 원문",
         persona_tone: map.persona_tone || "정보형",
+        seo_brief: map.seo_brief || "이 키워드는 비교/정리형 구성이 유리합니다.",
+        seo_strategy: map.seo_strategy || "독자의 비교 의도를 먼저 해소하고, 선택 기준을 분명히 설명합니다.",
+        seo_metrics: map.seo_metrics || "권장 글자수 1800~2600자 / 소제목 5개 / 이미지 3개",
       };
       return prompt.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) => {
         return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : (defaultMap[key] || `{${key}}`);
@@ -284,6 +290,14 @@
           selectedRow = r;
         }
         const statusClass = r.status === "ready" ? "ok" : (r.status === "error" || r.status === "blocked" ? "fail" : "neutral");
+        const usageTargets = Array.isArray(r.usage_targets) ? r.usage_targets : [];
+        const usageBadges = usageTargets.map((item) => {
+          if (item === "label.free") return `<span class="badge-channel">라벨 Free</span>`;
+          if (item === "label.paid") return `<span class="badge-channel">라벨 Paid</span>`;
+          if (item === "writer.default") return `<span class="badge-channel">글작성 기본</span>`;
+          if (item === "writer.channels") return `<span class="badge-channel">채널 ${Number(r.writer_channel_usage_count || 0)}개</span>`;
+          return "";
+        }).join("");
         card.innerHTML = `
           <div class="manage-card-head">
             <div class="manage-card-title">${escapeHtml(r.provider || "-")}</div>
@@ -294,6 +308,8 @@
             <span class="badge-status ${statusClass}">${escapeHtml(r.status || "unknown")}</span>
             <span class="badge-channel">${r.is_paid ? "유료" : "무료"}</span>
             <span class="badge-channel">p${escapeHtml(String(r.priority || 1))}</span>
+            <span class="badge-channel">${r.has_env ? "ENV 연결" : "ENV 없음"}</span>
+            ${usageBadges}
           </div>
         `;
         card.addEventListener("click", () => {
@@ -311,6 +327,7 @@
       }
       syncManageSwitchVisuals();
       await refreshProviderAliasHint();
+      refreshProviderUsageHint();
     }
 
     function providerPayload() {
@@ -336,6 +353,26 @@
       hint.textContent = missing.length
         ? `Alias 미존재: ${missing.join(", ")}`
         : "모든 API Key Alias 환경변수 확인됨";
+    }
+
+    function refreshProviderUsageHint() {
+      const usageHint = qs("#providerUsageHint");
+      const selectionHint = qs("#providerSelectionHint");
+      const rows = Array.isArray(state.providerRows) ? state.providerRows : [];
+      if (usageHint) {
+        const active = rows.filter((row) => !!row.is_enabled).length;
+        const ready = rows.filter((row) => !!row.is_enabled && !!row.has_env).length;
+        const labelFree = rows.find((row) => (row.usage_targets || []).includes("label.free"));
+        const labelPaid = rows.find((row) => (row.usage_targets || []).includes("label.paid"));
+        const writerDefault = rows.find((row) => (row.usage_targets || []).includes("writer.default"));
+        usageHint.textContent = `활성 ${active}개 / 즉시 사용 가능 ${ready}개 | 라벨 Free: ${labelFree ? `${labelFree.provider}/${labelFree.model_name}` : "자동 선택"} | 라벨 Paid: ${labelPaid ? `${labelPaid.provider}/${labelPaid.model_name}` : "자동 선택"} | 글작성 기본: ${writerDefault ? `${writerDefault.provider}/${writerDefault.model_name}` : "미지정"}`;
+      }
+      if (selectionHint) {
+        const channelBound = rows
+          .filter((row) => Number(row.writer_channel_usage_count || 0) > 0)
+          .map((row) => `${row.provider}/${row.model_name}(${Number(row.writer_channel_usage_count || 0)}개)`);
+        selectionHint.textContent = `채널별 지정: ${channelBound.length ? channelBound.join(", ") : "없음"} | SEO 분석: 현재 규칙 기반 분석`;
+      }
     }
 
     async function normalizeProviderPriorities() {
@@ -440,6 +477,7 @@
       refreshProviderSection,
       providerPayload,
       refreshProviderAliasHint,
+      refreshProviderUsageHint,
       normalizeProviderPriorities,
       healthCheckProvider,
       fillPersonaForm,

@@ -155,6 +155,16 @@
         `- 현재 작성상태: ${writerArticleStatusLabel(articleRow.article_status)}`,
         `- 현재 발행상태: ${articleRow.publish_status || "-"}`,
       ];
+      if (articleRow.seo_review && typeof articleRow.seo_review === "object") {
+        lines.push(`- SEO 검수: ${Number(articleRow.seo_review.score || 0)}점 / ${articleRow.seo_review.status || "-"}`);
+        const flags = Array.isArray(articleRow.seo_review.flags) ? articleRow.seo_review.flags : [];
+        flags.slice(0, 5).forEach((flag) => lines.push(`  · ${flag}`));
+        const recommendations = Array.isArray(articleRow.seo_review.recommendations) ? articleRow.seo_review.recommendations : [];
+        if (recommendations.length) {
+          lines.push("  [보완 가이드]");
+          recommendations.slice(0, 3).forEach((item) => lines.push(`  · ${item}`));
+        }
+      }
       if (articleRow.last_published_at) lines.push(`- 마지막 발행: ${fmt(articleRow.last_published_at)}`);
       if (filtered.length) {
         lines.push("");
@@ -199,6 +209,185 @@
       if (s === "published") return "발행완료";
       if (s === "failed") return "실패";
       return status || "-";
+    }
+
+    function writerSeoReviewBadge(review) {
+      const item = review && typeof review === "object" ? review : {};
+      const score = Number(item.score || 0);
+      const status = String(item.status || "기준없음");
+      if (status === "양호") return `<span class="badge-status ok">${score}점 · ${status}</span>`;
+      if (status === "보통") return `<span class="badge-status warn">${score}점 · ${status}</span>`;
+      return `<span class="badge-status neutral">${score}점 · ${status}</span>`;
+    }
+
+    function closeWriterArticleEditor() {
+      const modal = qs("#writerArticleModal");
+      if (!modal) return;
+      modal.classList.add("hidden");
+      modal.setAttribute("aria-hidden", "true");
+      state.writerEditingArticleId = null;
+    }
+
+    function closeWriterArticleViewer() {
+      const modal = qs("#writerArticleViewModal");
+      if (!modal) return;
+      modal.classList.add("hidden");
+      modal.setAttribute("aria-hidden", "true");
+      state.writerViewingArticleId = null;
+    }
+
+    function setWriterArticlePreviewContent(content) {
+      const target = qs("#writerArticleViewContent");
+      if (!target) return;
+      const text = String(content || "");
+      if (/<\/?[a-z][^>]*>/i.test(text)) {
+        target.innerHTML = text;
+        return;
+      }
+      target.textContent = text;
+    }
+
+    function renderWriterArticleHero(imageAssets) {
+      const target = qs("#writerArticleHero");
+      if (!target) return;
+      const asset = Array.isArray(imageAssets) ? imageAssets.find((item) => !!item?.local_url) : null;
+      if (!asset) {
+        target.classList.add("hidden");
+        target.innerHTML = "";
+        return;
+      }
+      const tags = Array.isArray(asset.subject_tags) ? asset.subject_tags.filter(Boolean).slice(0, 5) : [];
+      const meta = [
+        asset.image_type ? `type ${asset.image_type}` : "",
+        Number(asset.keyword_relevance_score || 0) ? `적합 ${Number(asset.keyword_relevance_score || 0)}` : "",
+        Number(asset.thumbnail_score || 0) ? `썸네일 ${Number(asset.thumbnail_score || 0)}` : "",
+        Number(asset.commercial_intent || 0) ? `광고 ${Number(asset.commercial_intent || 0)}` : "",
+      ].filter(Boolean).join(" | ");
+      target.innerHTML = `
+        <div class="writer-article-hero-label">대표 이미지</div>
+        <img class="writer-article-hero-image" src="${escapePreviewHtml(asset.local_url)}" alt="대표 이미지" loading="lazy" />
+        <div class="writer-article-hero-meta">${escapePreviewHtml(meta || "선택된 대표 이미지")}</div>
+        ${tags.length ? `<div class="writer-article-hero-tags">${escapePreviewHtml(tags.join(", "))}</div>` : ""}
+      `;
+      target.classList.remove("hidden");
+    }
+
+    function escapePreviewHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function renderWriterArticlePreview(content, imageAssets) {
+      const assetMap = new Map();
+      (Array.isArray(imageAssets) ? imageAssets : []).forEach((item) => {
+        const id = Number(item?.id || 0);
+        if (id > 0) assetMap.set(id, item);
+      });
+      const lines = String(content || "").split(/\r?\n/);
+      const htmlLines = lines.map((line) => {
+        const trimmed = String(line || "").trim();
+        const match = trimmed.match(/^\[\[IMAGE:(\d+)\]\](?:\s*-\s*(.*))?$/);
+        if (!match) return escapePreviewHtml(line);
+        const imageId = Number(match[1] || 0);
+        const caption = String(match[2] || "").trim();
+        const asset = assetMap.get(imageId);
+        if (!asset?.local_url) {
+          return `<div class="writer-image-missing">이미지 ${imageId} 미리보기 없음</div>`;
+        }
+        const tags = Array.isArray(asset.subject_tags) ? asset.subject_tags.filter(Boolean).slice(0, 4) : [];
+        const metaBits = [
+          asset.image_type ? `type ${asset.image_type}` : "",
+          Number(asset.keyword_relevance_score || 0) ? `적합 ${Number(asset.keyword_relevance_score || 0)}` : "",
+          Number(asset.commercial_intent || 0) ? `광고 ${Number(asset.commercial_intent || 0)}` : "",
+          tags.length ? `tags ${tags.join(", ")}` : "",
+        ].filter(Boolean);
+        const captionParts = [
+          caption ? `<div class="writer-inline-image-title">${escapePreviewHtml(caption)}</div>` : "",
+          metaBits.length ? `<div class="writer-inline-image-meta">${escapePreviewHtml(metaBits.join(" | "))}</div>` : "",
+        ].filter(Boolean).join("");
+        const captionHtml = captionParts ? `<figcaption>${captionParts}</figcaption>` : "";
+        return `<figure class="writer-inline-image"><img src="${escapePreviewHtml(asset.local_url)}" alt="${escapePreviewHtml(caption || `image-${imageId}`)}" loading="lazy" />${captionHtml}</figure>`;
+      });
+      return htmlLines.join("<br>");
+    }
+
+    async function openWriterArticleEditor(articleId) {
+      const id = Number(articleId || 0);
+      if (!id) throw new Error("수정할 글이 올바르지 않습니다.");
+      const article = await request(`/api/writer/articles/${id}`);
+      state.writerEditingArticleId = id;
+      qs("#writerArticleEditTitle").value = String(article?.title || "");
+      qs("#writerArticleEditContent").value = String(article?.content || "");
+      const review = article?.seo_review || {};
+      const flags = Array.isArray(review.flags) ? review.flags : [];
+      const recommendations = Array.isArray(review.recommendations) ? review.recommendations : [];
+      const hint = qs("#writerArticleReviewHint");
+      if (hint) {
+        const firstHint = recommendations[0] || flags[0] || "-";
+        hint.textContent = `SEO 검수 ${Number(review.score || 0)}점 / ${review.status || "-"} | ${firstHint}`;
+      }
+      const modal = qs("#writerArticleModal");
+      if (modal) {
+        modal.classList.remove("hidden");
+        modal.setAttribute("aria-hidden", "false");
+      }
+    }
+
+    async function openWriterArticleViewer(articleId) {
+      const id = Number(articleId || 0);
+      if (!id) throw new Error("볼 글이 올바르지 않습니다.");
+      const article = await request(`/api/writer/articles/${id}`);
+      state.writerViewingArticleId = id;
+      const titleInput = qs("#writerArticleViewTitleInput");
+      if (titleInput) titleInput.value = String(article?.title || "");
+      const review = article?.seo_review || {};
+      const flags = Array.isArray(review.flags) ? review.flags : [];
+      const meta = qs("#writerArticleViewMeta");
+      if (meta) {
+        meta.textContent = `SEO 검수 ${Number(review.score || 0)}점 / ${review.status || "-"} | ${flags[0] || "보기 전용"}`;
+      }
+      renderWriterArticleHero(article?.image_assets || []);
+      setWriterArticlePreviewContent(renderWriterArticlePreview(article?.content || "", article?.image_assets || []));
+      const modal = qs("#writerArticleViewModal");
+      if (modal) {
+        modal.classList.remove("hidden");
+        modal.setAttribute("aria-hidden", "false");
+      }
+    }
+
+    async function saveWriterArticleEditor() {
+      const id = Number(state.writerEditingArticleId || 0);
+      if (!id) throw new Error("저장할 글이 선택되지 않았습니다.");
+      await request(`/api/writer/articles/${id}/save`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: qs("#writerArticleEditTitle")?.value || "",
+          content: qs("#writerArticleEditContent")?.value || "",
+        }),
+      });
+      closeWriterArticleEditor();
+      await refreshWriterResultBoard();
+      showAlert("작성 결과가 저장되었습니다.", "성공", "success");
+    }
+
+    async function regenerateWriterArticle(articleId) {
+      const id = Number(articleId || 0);
+      if (!id) throw new Error("재생성할 글이 올바르지 않습니다.");
+      const result = await request(`/api/writer/articles/${id}/regenerate`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      registerWriterBoardHistory(id, "재생성 실행");
+      await refreshWriterResultBoard();
+      const editingId = Number(state.writerEditingArticleId || 0);
+      if (editingId === id) {
+        await openWriterArticleEditor(id);
+      }
+      showAlert(`글을 다시 생성했습니다. ${result?.seo_profile_used ? "SEO 패턴 반영" : "일반 작성"}`, "재생성 완료", "success");
     }
 
     function getFilteredWriterBoardRows() {
@@ -273,11 +462,18 @@
       const start = (state.writerBoardPage - 1) * state.writerBoardPageSize;
       const pageRows = rows.slice(start, start + state.writerBoardPageSize);
 
-      tbody.innerHTML = pageRows.length ? "" : "<tr><td colspan='8'>작성 결과가 없습니다.</td></tr>";
+      tbody.innerHTML = pageRows.length ? "" : "<tr><td colspan='9'>작성 결과가 없습니다.</td></tr>";
       const selected = new Set(getSelectedWriterBoardIds());
       pageRows.forEach((r) => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td><input type="checkbox" data-action="pick-row" ${selected.has(Number(r.id)) ? "checked" : ""}/></td><td>${r.id}</td><td>${r.title || ""}</td><td>${writerArticleStatusLabel(r.article_status)}</td><td>${r.publish_status || "-"}</td><td>${r.publish_channel || "-"}</td><td>${fmt(r.created_at)}</td><td><button class="btn" data-action="publish-now">즉시 발행</button> <button class="btn ghost" data-action="show-history">히스토리</button></td>`;
+        const review = r.seo_review || {};
+        const reviewHint = Array.isArray(review.recommendations) && review.recommendations.length
+          ? review.recommendations[0]
+          : ((Array.isArray(review.flags) && review.flags.length) ? review.flags[0] : "");
+        const reviewFlags = reviewHint
+          ? `<div class="label-badge-row"><span class="badge-channel">${reviewHint}</span></div>`
+          : "";
+        tr.innerHTML = `<td><input type="checkbox" data-action="pick-row" ${selected.has(Number(r.id)) ? "checked" : ""}/></td><td>${r.id}</td><td>${r.title || ""}</td><td>${writerSeoReviewBadge(review)}${reviewFlags}</td><td>${writerArticleStatusLabel(r.article_status)}</td><td>${r.publish_status || "-"}</td><td>${r.publish_channel || "-"}</td><td>${fmt(r.created_at)}</td><td><button class="btn ghost" data-action="view-article">보기</button> <button class="btn ghost" data-action="edit-article">수정</button> <button class="btn ghost" data-action="regenerate-article">재생성</button> <button class="btn" data-action="publish-now">즉시 발행</button> <button class="btn ghost" data-action="show-history">히스토리</button></td>`;
         tr.querySelector("[data-action='pick-row']")?.addEventListener("change", (e) => {
           const ids = new Set(getSelectedWriterBoardIds());
           const id = Number(r.id || 0);
@@ -285,6 +481,22 @@
           else ids.delete(id);
           setWriterBoardSelectedIds([...ids]);
           updateWriterBoardPickAllState(pageRows);
+        });
+        tr.querySelector("[data-action='view-article']")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openWriterArticleViewer(Number(r.id || 0)).catch((err) => showAlert(String(err), "오류", "error"));
+        });
+        tr.querySelector("[data-action='edit-article']")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openWriterArticleEditor(Number(r.id || 0)).catch((err) => showAlert(String(err), "오류", "error"));
+        });
+        tr.querySelector("[data-action='regenerate-article']")?.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          try {
+            await regenerateWriterArticle(Number(r.id || 0));
+          } catch (err) {
+            showAlert(String(err), "오류", "error");
+          }
         });
         tr.querySelector("[data-action='publish-now']")?.addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -349,13 +561,20 @@
       const status = String(qs("#writerBoardBulkStatus")?.value || "").trim();
       if (!ids.length) throw new Error("선택된 글이 없습니다.");
       if (!status) throw new Error("변경할 상태를 선택하세요.");
-      await request("/api/writer/articles/batch-status", {
+      const result = await request("/api/writer/articles/batch-status", {
         method: "POST",
         body: JSON.stringify({ article_ids: ids, status }),
       });
-      ids.forEach((id) => registerWriterBoardHistory(id, `상태 변경 -> ${status}`));
+      const updatedCount = Number(result?.updated || 0);
+      ids.slice(0, updatedCount).forEach((id) => registerWriterBoardHistory(id, `상태 변경 -> ${status}`));
       await refreshWriterResultBoard();
-      showAlert(`상태가 ${ids.length}건 변경되었습니다.`, "성공", "success");
+      const blocked = Array.isArray(result?.blocked) ? result.blocked : [];
+      if (blocked.length) {
+        const first = blocked[0];
+        showAlert(`상태 변경 완료: 성공 ${updatedCount}건 / 차단 ${blocked.length}건\n첫 차단 사유: ${first.reason || "-"}`, "결과", updatedCount ? "warn" : "error");
+        return;
+      }
+      showAlert(`상태가 ${updatedCount}건 변경되었습니다.`, "성공", "success");
     }
 
     async function runWriter() {
@@ -417,6 +636,12 @@
       publishWriterBoardArticle,
       bulkPublishWriterBoardArticles,
       bulkUpdateWriterBoardStatus,
+      openWriterArticleEditor,
+      openWriterArticleViewer,
+      closeWriterArticleEditor,
+      closeWriterArticleViewer,
+      saveWriterArticleEditor,
+      regenerateWriterArticle,
       runWriter,
       stopWriter,
       startWriterPolling,

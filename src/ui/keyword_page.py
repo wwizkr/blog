@@ -144,44 +144,28 @@ class KeywordPage(QWidget):
         top_row.addWidget(reload_btn)
         layout.addLayout(top_row)
 
-        self.related_table = QTableWidget(0, 5)
-        self.related_table.setHorizontalHeaderLabels(["연결ID", "연관 키워드", "반영횟수", "최종반영일", "연관키워드ID"])
+        self.related_table = QTableWidget(0, 7)
+        self.related_table.setHorizontalHeaderLabels(["연결ID", "연관 키워드", "소스", "활성", "반영횟수", "최종반영일", "연관키워드ID"])
         self.related_table.verticalHeader().setVisible(False)
         self.related_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.related_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.related_table.setColumnWidth(0, 70)
         self.related_table.setColumnWidth(1, 220)
-        self.related_table.setColumnWidth(2, 90)
-        self.related_table.setColumnWidth(3, 150)
-        self.related_table.setColumnHidden(4, True)
+        self.related_table.setColumnWidth(2, 140)
+        self.related_table.setColumnWidth(3, 80)
+        self.related_table.setColumnWidth(4, 90)
+        self.related_table.setColumnWidth(5, 150)
+        self.related_table.setColumnHidden(6, True)
         self.related_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(QLabel("자동 반영 목록"))
+        layout.addWidget(QLabel("연관키워드 목록"))
         layout.addWidget(self.related_table, 1)
 
         action_row = QHBoxLayout()
-        block_btn = QPushButton("선택 연관키워드 삭제(차단)")
-        block_btn.clicked.connect(self.block_selected_related_keyword)
-        action_row.addWidget(block_btn)
+        toggle_btn = QPushButton("선택 연관키워드 활성/비활성")
+        toggle_btn.clicked.connect(self.toggle_selected_related_keyword)
+        action_row.addWidget(toggle_btn)
         action_row.addStretch(1)
         layout.addLayout(action_row)
-
-        self.block_table = QTableWidget(0, 3)
-        self.block_table.setHorizontalHeaderLabels(["차단ID", "차단 키워드", "차단일시"])
-        self.block_table.verticalHeader().setVisible(False)
-        self.block_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.block_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.block_table.setColumnWidth(0, 70)
-        self.block_table.setColumnWidth(1, 220)
-        self.block_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(QLabel("차단 목록"))
-        layout.addWidget(self.block_table, 1)
-
-        unblock_row = QHBoxLayout()
-        unblock_btn = QPushButton("선택 차단 해제")
-        unblock_btn.clicked.connect(self.unblock_selected_related_keyword)
-        unblock_row.addWidget(unblock_btn)
-        unblock_row.addStretch(1)
-        layout.addLayout(unblock_row)
 
         box.setLayout(layout)
         return box
@@ -251,7 +235,6 @@ class KeywordPage(QWidget):
 
     def refresh_related_section(self) -> None:
         self.refresh_related_keywords()
-        self.refresh_related_blocks()
 
     def refresh_related_keywords(self) -> None:
         source_keyword_id = self.source_keyword_combo.currentData()
@@ -263,21 +246,13 @@ class KeywordPage(QWidget):
         for i, item in enumerate(rows):
             self.related_table.setItem(i, 0, QTableWidgetItem(str(item.relation_id)))
             self.related_table.setItem(i, 1, QTableWidgetItem(item.related_keyword))
-            self.related_table.setItem(i, 2, QTableWidgetItem(str(item.collect_count)))
-            self.related_table.setItem(i, 3, QTableWidgetItem(item.last_seen_at.strftime("%Y-%m-%d %H:%M:%S")))
-            self.related_table.setItem(i, 4, QTableWidgetItem(str(item.related_keyword_id)))
-
-    def refresh_related_blocks(self) -> None:
-        source_keyword_id = self.source_keyword_combo.currentData()
-        if source_keyword_id is None:
-            self.block_table.setRowCount(0)
-            return
-        rows = KeywordRepository.list_related_blocks(int(source_keyword_id))
-        self.block_table.setRowCount(len(rows))
-        for i, item in enumerate(rows):
-            self.block_table.setItem(i, 0, QTableWidgetItem(str(item.block_id)))
-            self.block_table.setItem(i, 1, QTableWidgetItem(item.related_keyword))
-            self.block_table.setItem(i, 2, QTableWidgetItem(item.created_at.strftime("%Y-%m-%d %H:%M:%S")))
+            self.related_table.setItem(i, 2, QTableWidgetItem(item.source_type))
+            active_item = QTableWidgetItem("Y" if item.is_active else "N")
+            active_item.setTextAlignment(Qt.AlignCenter)
+            self.related_table.setItem(i, 3, active_item)
+            self.related_table.setItem(i, 4, QTableWidgetItem(str(item.collect_count)))
+            self.related_table.setItem(i, 5, QTableWidgetItem(item.last_seen_at.strftime("%Y-%m-%d %H:%M:%S")))
+            self.related_table.setItem(i, 6, QTableWidgetItem(str(item.related_keyword_id)))
 
     def _selected_row_id(self, table: QTableWidget) -> int | None:
         row = table.currentRow()
@@ -350,28 +325,17 @@ class KeywordPage(QWidget):
         KeywordRepository.toggle(keyword_id)
         self.refresh_keywords()
 
-    def block_selected_related_keyword(self) -> None:
-        source_keyword_id = self.source_keyword_combo.currentData()
+    def toggle_selected_related_keyword(self) -> None:
         row = self.related_table.currentRow()
-        if source_keyword_id is None or row < 0:
-            QMessageBox.information(self, "알림", "원본 키워드와 연관키워드를 선택하세요.")
+        if row < 0:
+            QMessageBox.information(self, "알림", "연관키워드를 선택하세요.")
             return
-        related_id_item = self.related_table.item(row, 4)
+        related_id_item = self.related_table.item(row, 6)
         if not related_id_item:
             QMessageBox.warning(self, "알림", "연관키워드 ID를 찾을 수 없습니다.")
             return
         related_keyword_id = int(related_id_item.text())
-        KeywordRepository.block_and_remove_related(int(source_keyword_id), related_keyword_id)
+        KeywordRepository.toggle(related_keyword_id)
         self.refresh_related_section()
-        QMessageBox.information(self, "완료", "연관키워드가 삭제되고 해당 원본 키워드 기준으로 차단되었습니다.")
-
-    def unblock_selected_related_keyword(self) -> None:
-        source_keyword_id = self.source_keyword_combo.currentData()
-        block_id = self._selected_row_id(self.block_table)
-        if source_keyword_id is None or block_id is None:
-            QMessageBox.information(self, "알림", "차단 해제할 항목을 선택하세요.")
-            return
-        KeywordRepository.unblock_related_block(block_id)
-        self.refresh_related_section()
-        QMessageBox.information(self, "완료", "선택한 연관키워드 차단이 해제되었습니다.")
+        QMessageBox.information(self, "완료", "연관키워드 활성 상태가 변경되었습니다.")
 

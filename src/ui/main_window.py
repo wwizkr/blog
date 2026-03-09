@@ -51,7 +51,7 @@ NODE_TO_SECTION = {
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("BlogWriter")
+        self.setWindowTitle("MubloOps")
         self._group_bodies: dict[str, QWidget] = {}
         self._init_size()
         self._build_ui()
@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 14, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("BlogWriter")
+        title = QLabel("MubloOps")
         title.setStyleSheet("font-size: 20px; font-weight: 800; color: #f9fafb;")
         layout.addWidget(title)
 

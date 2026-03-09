@@ -1,7 +1,7 @@
 [project]
-name = "blogwriter"
+name = "mublo-ops"
 version = "0.1.0"
-description = "Desktop content collector/writer/publisher"
+description = "Mublo content operations desktop app"
 requires-python = ">=3.12"
 dependencies = [
   "PySide6>=6.8.0",
@@ -10,6 +10,7 @@ dependencies = [
   "python-dotenv>=1.0.1",
   "requests>=2.32.3",
   "beautifulsoup4>=4.12.3",
+  "selenium>=4.29.0",
 ]
 
 [tool.pytest.ini_options]

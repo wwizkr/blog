@@ -174,7 +174,10 @@
       qs("#collectSummaryTimeout").textContent = String(s.request_timeout || "-");
       qs("#collectSummaryRetry").textContent = String(s.retry_count || "-");
       qs("#collectSummaryScope").textContent = scopeLabel(s.keyword_scope || "selected");
-      qs("#collectSummaryNaver").textContent = s.naver_related_sync ? "사용" : "미사용";
+      const sourceRows = s.available_keyword_sources || [];
+      const sourceMap = new Map(sourceRows.map((row) => [String(row.code), String(row.label || row.code)]));
+      const sourceLabels = (s.keyword_source_codes || []).map((code) => sourceMap.get(String(code)) || String(code));
+      qs("#collectSummaryNaver").textContent = sourceLabels.length ? sourceLabels.join(", ") : "미사용";
       qs("#collectSummaryChannels").textContent = `${selectedChannelCount}/${totalChannelCount}`;
       qs("#collectSummaryCategories").textContent = `${selectedCategoryCount}/${allCategoryIds.length}`;
     }

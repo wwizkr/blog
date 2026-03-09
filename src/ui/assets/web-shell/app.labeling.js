@@ -27,6 +27,8 @@
         paid_api_daily_limit: clampInt(qs("#labelSettingPaidLimit")?.value || 20, 0, 100000, 20),
         threshold_mid: thresholdMid,
         threshold_high: Math.max(thresholdMid, thresholdHighRaw),
+        free_provider_id: clampInt(qs("#labelSettingFreeProvider")?.value || 0, 0, 9999999, 0) || null,
+        paid_provider_id: clampInt(qs("#labelSettingPaidProvider")?.value || 0, 0, 9999999, 0) || null,
       };
     }
 
@@ -37,6 +39,32 @@
         policy.disabled = method !== "ai";
         policy.title = method === "ai" ? "" : "rule 방식에서는 재라벨링 정책이 사용되지 않습니다.";
       }
+    }
+
+    function summarizeProviders(items) {
+      const rows = Array.isArray(items) ? items : [];
+      if (!rows.length) return "없음";
+      const ready = rows.filter((row) => !!row.ready);
+      if (!ready.length) return "설정됨(ENV 없음)";
+      return ready.map((row) => `${row.provider}/${row.model_name}`).join(", ");
+    }
+
+    function providerOptionLabel(row) {
+      const provider = String(row?.provider || "-");
+      const model = String(row?.model_name || "-");
+      const status = row?.ready ? "ready" : (row?.has_env ? "env" : "env 없음");
+      return `${provider}/${model} (${status})`;
+    }
+
+    function fillProviderSelect(selectId, rows, selectedId) {
+      const select = qs(`#${selectId}`);
+      if (!select) return;
+      const current = String(selectedId || "");
+      const items = Array.isArray(rows) ? rows : [];
+      select.innerHTML = `<option value="">자동 선택</option>${
+        items.map((row) => `<option value="${Number(row.id || 0)}">${providerOptionLabel(row)}</option>`).join("")
+      }`;
+      select.value = current;
     }
 
     function applyLabelSettingToForm(payload) {
@@ -57,6 +85,8 @@
       if (qs("#labelSettingPaidLimit")) qs("#labelSettingPaidLimit").value = String(paidLimit);
       if (qs("#labelSettingThresholdMid")) qs("#labelSettingThresholdMid").value = String(thresholdMid);
       if (qs("#labelSettingThresholdHigh")) qs("#labelSettingThresholdHigh").value = String(thresholdHigh);
+      fillProviderSelect("labelSettingFreeProvider", payload.available_ai_providers?.free || [], payload.free_provider_id || "");
+      fillProviderSelect("labelSettingPaidProvider", payload.available_ai_providers?.paid || [], payload.paid_provider_id || "");
       syncLabelSettingModeUi();
     }
 
@@ -72,9 +102,10 @@
 
     async function refreshLabelSettingHints(stats) {
       const hintMode = qs("#labelSettingModeHint");
+      const hintProvider = qs("#labelSettingProviderHint");
       const hintQuality = qs("#labelSettingQualityHint");
       const hintAuto = qs("#labelSettingAutoHint");
-      if (!hintMode && !hintQuality && !hintAuto) return;
+      if (!hintMode && !hintProvider && !hintQuality && !hintAuto) return;
       const cfg = labelSettingDraft();
       const modeText = cfg.method === "ai"
         ? "AI 방식: 고품질 라벨링, 처리속도/비용 영향이 큽니다."
@@ -95,6 +126,7 @@
       const data = stat && stat.ok ? (stat.data || {}) : {};
       const auto = autoStatusRes && autoStatusRes.ok ? (autoStatusRes.data || {}) : {};
       const setting = settingRes && settingRes.ok ? (settingRes.data || {}) : {};
+      const providers = setting.available_ai_providers || {};
       const contentTotal = Number(data.contents_total || 0);
       const contentLabeled = Number(data.contents_labeled || 0);
       const imageTotal = Number(data.images_total || 0);
@@ -106,6 +138,9 @@
         : cfg.quality_threshold <= 2
           ? "완화: 처리량 증가, 품질 편차 증가"
           : "균형: 처리량/품질 균형";
+      if (hintProvider) {
+        hintProvider.textContent = `AI Provider | Free: ${summarizeProviders(providers.free)} | Paid: ${summarizeProviders(providers.paid)}`;
+      }
       if (hintQuality) hintQuality.textContent = `품질 임계값 ${cfg.quality_threshold} (${impact}) | 예상 남은 배치 ${batchNeed}회`;
       if (hintAuto) {
         const autoMode = cfg.auto_enabled ? "ON" : "OFF";
@@ -185,13 +220,14 @@
       }, 10000);
     }
 
-    async function runLabelingStage(stage) {
+    async function runLabelingStage(stage, options = {}) {
       const kind = stage === "image" ? "image" : "content";
       const endpoint = kind === "image" ? "/api/labeling/run-image" : "/api/labeling/run-content";
       const label = kind === "image" ? "이미지" : "텍스트";
+      const relabelExisting = !!options.relabelExisting && kind === "image";
       try {
-        const r = await request(endpoint, { method: "POST", body: "{}" });
-        appendLog("labelingLogTable", `${label} 라벨링 완료: ${r.labeled}/${r.target}`);
+        const r = await request(endpoint, { method: "POST", body: JSON.stringify({ relabel_existing: relabelExisting }) });
+        appendLog("labelingLogTable", `${label} 라벨링 완료: ${r.labeled}/${r.target}${relabelExisting ? " (재라벨링)" : ""}`);
         state.labelLastFailedStage = "";
         updateRetryLabelingButton();
         await refreshLabelingSection();
@@ -226,6 +262,9 @@
         paid_api_daily_limit: s.paid_api_daily_limit || 20,
         threshold_mid: s.threshold_mid || 3,
         threshold_high: s.threshold_high || 4,
+        free_provider_id: s.free_provider_id || null,
+        paid_provider_id: s.paid_provider_id || null,
+        available_ai_providers: s.available_ai_providers || {},
       });
       const presetNode = qs("#labelSettingPreset");
       if (presetNode) {

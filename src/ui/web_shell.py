@@ -10,7 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,9 +22,12 @@ from urllib import request as urlrequest
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
+from collector.manager import collector_manager
 from collector.service import crawl_service
 from collector.scheduler import collect_scheduler
 from core.settings import settings
+from keyword_engine.service import keyword_engine_service
+from seo_profile.service import keyword_seo_profile_service
 from labeling import labeling_service
 from labeling.scheduler import labeling_auto_scheduler
 from publisher import publisher_service
@@ -60,6 +63,7 @@ from storage.repositories import (
     CategoryRepository,
     CrawlRepository,
     KeywordRepository,
+    KeywordSeoProfileRepository,
     LabelRepository,
     SourceChannelRepository,
     PersonaRepository,
@@ -458,6 +462,11 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             return self._serve_categories()
         if route == "/api/keywords":
             return self._serve_keywords()
+        if route.startswith("/api/keywords/") and route.endswith("/seo-profile"):
+            parts = route.strip("/").split("/")
+            if len(parts) == 4 and parts[2].isdigit():
+                return self._serve_keyword_seo_profile(int(parts[2]))
+            return self._write_json({"error": "invalid keyword seo profile route"}, 400)
         if route == "/api/settings/related-keyword-limit":
             return self._serve_related_keyword_limit()
 
@@ -466,12 +475,6 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             if not source_keyword_id:
                 return self._write_json({"error": "source_keyword_id is required"}, 400)
             return self._serve_related_keywords(source_keyword_id)
-
-        if route == "/api/related-blocks":
-            source_keyword_id = _to_int((query.get("source_keyword_id") or [None])[0])
-            if not source_keyword_id:
-                return self._write_json({"error": "source_keyword_id is required"}, 400)
-            return self._serve_related_blocks(source_keyword_id)
 
         if route == "/api/source-channels":
             return self._serve_source_channels()
@@ -623,9 +626,16 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             parts = route.strip("/").split("/")
             if len(parts) == 4 and parts[2].isdigit():
                 return self._toggle_keyword(int(parts[2]))
+        if route.startswith("/api/keywords/") and route.endswith("/seo-profile/analyze"):
+            parts = route.strip("/").split("/")
+            if len(parts) == 5 and parts[2].isdigit():
+                return self._analyze_keyword_seo_profile(int(parts[2]))
+            return self._write_json({"error": "invalid keyword seo profile analyze route"}, 400)
 
-        if route == "/api/related/block":
-            return self._block_related_keyword()
+        if route == "/api/related/toggle":
+            return self._toggle_related_keyword()
+        if route == "/api/related/sync":
+            return self._sync_related_keywords()
 
         if route.startswith("/api/source-channels/") and route.endswith("/toggle"):
             parts = route.strip("/").split("/")
@@ -653,10 +663,12 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                 scope = str(AppSettingRepository.get_value(CollectSettingKeys.KEYWORD_SCOPE, "selected") or "selected").strip().lower()
                 if scope not in {"all", "selected", "related"}:
                     scope = "selected"
-                sync_related = _to_bool(AppSettingRepository.get_value(CollectSettingKeys.NAVER_RELATED_SYNC, "1"))
+                related_source_codes = keyword_engine_service.get_enabled_source_codes()
+                auto_related_sync = _to_bool(AppSettingRepository.get_value(CollectSettingKeys.AUTO_RELATED_SYNC, "0"))
+                sync_related = auto_related_sync and bool(related_source_codes)
     
-                all_keywords = [k for k in KeywordRepository.list_all() if k.is_active and not k.is_auto_generated]
                 all_active_keywords = {k.id: k for k in KeywordRepository.list_all() if k.is_active}
+                root_keywords = [k for k in all_active_keywords.values() if not k.is_auto_generated]
     
                 selected_channel_codes = _safe_json_list(AppSettingRepository.get_value(CollectSettingKeys.SELECTED_CHANNEL_CODES, "[]"))
                 selected_category_ids = [
@@ -667,33 +679,22 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
     
                 target_ids: list[int] = []
                 if scope == "all":
-                    target_ids = [k.id for k in all_keywords]
+                    target_ids = _expand_with_active_related([k.id for k in root_keywords], all_active_keywords)
                 elif scope == "related":
                     base_ids: list[int] = []
                     if selected_category_set:
-                        base_ids = [k.id for k in all_keywords if (k.category_id or 0) in selected_category_set]
+                        base_ids = [k.id for k in root_keywords if (k.category_id or 0) in selected_category_set]
                     elif keyword_id:
                         base_ids = [keyword_id]
                     if not base_ids:
                         return self._write_json({"error": "키워드 확장 실행에는 기준 키워드 또는 체크된 카테고리가 필요합니다."}, 400)
-    
-                    ordered: list[int] = []
-                    seen: set[int] = set()
-                    for base_id in base_ids:
-                        if base_id not in seen and base_id in all_active_keywords:
-                            seen.add(base_id)
-                            ordered.append(base_id)
-                        for rel in KeywordRepository.list_related_keywords(base_id):
-                            rid = int(rel.related_keyword_id)
-                            if rid in all_active_keywords and rid not in seen:
-                                seen.add(rid)
-                                ordered.append(rid)
-                    target_ids = ordered
+                    target_ids = _expand_with_active_related(base_ids, all_active_keywords)
                 else:
                     if selected_category_set:
-                        target_ids = [k.id for k in all_keywords if (k.category_id or 0) in selected_category_set]
+                        base_ids = [k.id for k in root_keywords if (k.category_id or 0) in selected_category_set]
+                        target_ids = _expand_with_active_related(base_ids, all_active_keywords)
                     elif keyword_id:
-                        target_ids = [keyword_id]
+                        target_ids = _expand_with_active_related([keyword_id], all_active_keywords)
                     else:
                         return self._write_json({"error": "체크된 내역 수집에는 체크 카테고리 또는 keyword_id가 필요합니다."}, 400)
     
@@ -715,6 +716,7 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                             keyword_id=target_id,
                             max_results=max_results,
                             sync_related=sync_related,
+                            related_source_codes=related_source_codes,
                             allowed_channels=(selected_channel_codes or None) if scope != "all" else None,
                         )
                     )
@@ -737,7 +739,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         if route == "/api/labeling/run-image":
             batch_size = _to_int(AppSettingRepository.get_value(LabelSettingKeys.BATCH_SIZE, "300")) or 300
             batch_size = max(10, min(1000, batch_size))
-            result = labeling_service.label_unlabeled_images(limit=batch_size)
+            data = self._read_json_body() or {}
+            include_completed = bool(data.get("relabel_existing"))
+            result = labeling_service.label_unlabeled_images(limit=batch_size, include_completed=include_completed)
             return self._write_json({"ok": True, **result})
         if route == "/api/labeling/auto/tick":
             result = labeling_auto_scheduler.run_once()
@@ -779,6 +783,10 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         if route == "/api/writer/stop":
             stopped = writer_run_control.request_stop()
             return self._write_json({"ok": stopped, "requested": stopped, **writer_run_control.status()})
+        if route.startswith("/api/writer/articles/") and route.endswith("/regenerate"):
+            parts = route.strip("/").split("/")
+            if len(parts) == 5 and parts[3].isdigit():
+                return self._writer_regenerate_article(int(parts[3]))
         if route.startswith("/api/writer/articles/") and route.endswith("/save"):
             parts = route.strip("/").split("/")
             if len(parts) == 5 and parts[3].isdigit():
@@ -856,12 +864,6 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                 KeywordRepository.delete(int(parts[2]))
                 return self._write_json({"ok": True})
 
-        if route.startswith("/api/related-blocks/"):
-            parts = route.strip("/").split("/")
-            if len(parts) == 3 and parts[2].isdigit():
-                KeywordRepository.unblock_related_block(int(parts[2]))
-                return self._write_json({"ok": True})
-
         if route.startswith("/api/personas/"):
             parts = route.strip("/").split("/")
             if len(parts) == 3 and parts[2].isdigit():
@@ -913,6 +915,33 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
     def _serve_related_keyword_limit(self) -> None:
         return self._write_json({"limit": AppSettingRepository.get_related_keyword_limit(10)})
 
+    def _serve_keyword_seo_profile(self, keyword_id: int) -> None:
+        keyword = KeywordRepository.get_by_id(keyword_id)
+        if not keyword:
+            return self._write_json({"error": "keyword not found"}, 404)
+        profile = KeywordSeoProfileRepository.get_by_keyword_id(keyword_id)
+        payload = None
+        if profile:
+            payload = {
+                "sample_count": profile.sample_count,
+                "avg_title_length": profile.avg_title_length,
+                "avg_body_length": profile.avg_body_length,
+                "avg_heading_count": profile.avg_heading_count,
+                "avg_image_count": profile.avg_image_count,
+                "avg_list_count": profile.avg_list_count,
+                "dominant_format": profile.dominant_format,
+                "common_sections": profile.common_sections,
+                "common_terms": profile.common_terms,
+                "recommended_length_min": profile.recommended_length_min,
+                "recommended_length_max": profile.recommended_length_max,
+                "recommended_heading_count": profile.recommended_heading_count,
+                "recommended_image_count": profile.recommended_image_count,
+                "summary_text": profile.summary_text,
+                "analysis_basis": profile.analysis_basis,
+                "analyzed_at": _dt_to_iso(profile.analyzed_at),
+            }
+        return self._write_json({"keyword_id": keyword_id, "keyword": keyword.keyword, "profile": payload})
+
     def _serve_related_keywords(self, source_keyword_id: int) -> None:
         rows = KeywordRepository.list_related_keywords(source_keyword_id)
         payload = [
@@ -921,6 +950,8 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                 "source_keyword_id": row.source_keyword_id,
                 "related_keyword_id": row.related_keyword_id,
                 "related_keyword": row.related_keyword,
+                "is_active": row.is_active,
+                "source_type": row.source_type,
                 "collect_count": row.collect_count,
                 "last_seen_at": _dt_to_iso(row.last_seen_at),
             }
@@ -928,20 +959,8 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         ]
         return self._write_json(payload)
 
-    def _serve_related_blocks(self, source_keyword_id: int) -> None:
-        rows = KeywordRepository.list_related_blocks(source_keyword_id)
-        payload = [
-            {
-                "block_id": row.block_id,
-                "source_keyword_id": row.source_keyword_id,
-                "related_keyword": row.related_keyword,
-                "created_at": _dt_to_iso(row.created_at),
-            }
-            for row in rows
-        ]
-        return self._write_json(payload)
-
     def _serve_source_channels(self) -> None:
+        SourceChannelRepository.sync_from_collectors(collector_manager.list_channels())
         rows = SourceChannelRepository.list_all()
         return self._write_json(
             [
@@ -1018,11 +1037,33 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         )
     def _serve_collected_contents(self, page: int = 1, page_size: int = 15) -> None:
         with session_scope() as session:
-            total = int(session.query(func.count(RawContent.id)).scalar() or 0)
+            params = parse_qs(urlparse(self.path).query or "")
+            search = str((params.get("search") or [""])[0] or "").strip()
+            structure = str((params.get("structure_type") or [""])[0] or "").strip()
+            label_status = str((params.get("label_status") or [""])[0] or "").strip()
+
+            query = (
+                session.query(RawContent)
+                .outerjoin(ContentLabel, ContentLabel.content_id == RawContent.id)
+                .outerjoin(Keyword, Keyword.id == RawContent.keyword_id)
+            )
+            if search:
+                like = f"%{search}%"
+                query = query.filter(
+                    (RawContent.title.ilike(like))
+                    | (RawContent.body_text.ilike(like))
+                    | (Keyword.keyword.ilike(like))
+                )
+            if structure:
+                query = query.filter(ContentLabel.structure_type == structure)
+            if label_status:
+                query = query.filter(RawContent.label_status == label_status)
+
+            total = int(query.with_entities(func.count(RawContent.id)).scalar() or 0)
             total_pages = max(1, (total + page_size - 1) // page_size)
             page = min(max(1, page), total_pages)
             rows = (
-                session.query(RawContent)
+                query
                 .order_by(RawContent.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
@@ -1039,6 +1080,18 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                     "label_status": row.label_status or "pending",
                     "label_attempt_count": int(row.label_attempt_count or 0),
                     "label_confidence": int(row.label_confidence or 0) if row.label_confidence is not None else None,
+                    "label_summary": (
+                        {
+                            "quality_score": int(content_label.quality_score or 0),
+                            "structure_type": content_label.structure_type or "",
+                            "commercial_intent": int(content_label.commercial_intent or 0),
+                            "writing_fit_score": int(content_label.writing_fit_score or 0),
+                            "cta_present": bool(content_label.cta_present),
+                            "faq_structure": bool(content_label.faq_structure),
+                        }
+                        if (content_label := session.query(ContentLabel).filter(ContentLabel.content_id == row.id).first())
+                        else None
+                    ),
                     "created_at": _dt_to_iso(row.created_at),
                 }
                 for row in rows
@@ -1047,11 +1100,34 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_collected_images(self, page: int = 1, page_size: int = 24) -> None:
         with session_scope() as session:
-            total = int(session.query(func.count(RawImage.id)).scalar() or 0)
+            params = parse_qs(urlparse(self.path).query or "")
+            search = str((params.get("search") or [""])[0] or "").strip()
+            label_status = str((params.get("label_status") or [""])[0] or "").strip()
+
+            query = (
+                session.query(RawImage, RawContent.title.label("content_title"), Keyword.keyword.label("keyword_text"))
+                .outerjoin(ImageLabel, ImageLabel.image_id == RawImage.id)
+                .outerjoin(RawContent, RawContent.id == RawImage.content_id)
+                .outerjoin(Keyword, Keyword.id == RawContent.keyword_id)
+            )
+            if search:
+                like = f"%{search}%"
+                query = query.filter(
+                    (RawImage.image_url.ilike(like))
+                    | (RawImage.source_url.ilike(like))
+                    | (RawImage.local_path.ilike(like))
+                    | (func.cast(RawImage.content_id, String).ilike(like))
+                    | (RawContent.title.ilike(like))
+                    | (Keyword.keyword.ilike(like))
+                )
+            if label_status:
+                query = query.filter(RawImage.label_status == label_status)
+
+            total = int(query.with_entities(func.count(RawImage.id)).scalar() or 0)
             total_pages = max(1, (total + page_size - 1) // page_size)
             page = min(max(1, page), total_pages)
             rows = (
-                session.query(RawImage)
+                query
                 .order_by(RawImage.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
@@ -1059,16 +1135,32 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             )
             payload = [
                 {
-                    "id": row.id,
-                    "content_id": row.content_id,
-                    "image_url": row.image_url,
-                    "local_path": row.local_path or "",
-                    "local_url": f"/api/collected/images/{row.id}/file" if row.local_path else "",
-                    "label_status": row.label_status or "pending",
-                    "label_attempt_count": int(row.label_attempt_count or 0),
-                    "label_confidence": int(row.label_confidence or 0) if row.label_confidence is not None else None,
+                    "id": image.id,
+                    "content_id": image.content_id,
+                    "keyword": keyword_text or "",
+                    "content_title": content_title or "",
+                    "image_url": image.image_url,
+                    "source_url": image.source_url or "",
+                    "local_path": image.local_path or "",
+                    "local_url": f"/api/collected/images/{image.id}/file" if image.local_path else "",
+                    "label_status": image.label_status or "pending",
+                    "label_attempt_count": int(image.label_attempt_count or 0),
+                    "label_confidence": int(image.label_confidence or 0) if image.label_confidence is not None else None,
+                    "label_summary": (
+                        {
+                            "quality_score": int(image_label.quality_score or 0),
+                            "is_thumbnail_candidate": bool(image_label.is_thumbnail_candidate),
+                            "thumbnail_score": int(image_label.thumbnail_score or 0),
+                            "text_overlay": bool(image_label.text_overlay),
+                            "image_type": image_label.image_type or "",
+                            "commercial_intent": int(image_label.commercial_intent or 0),
+                            "keyword_relevance_score": int(image_label.keyword_relevance_score or 0),
+                        }
+                        if (image_label := session.query(ImageLabel).filter(ImageLabel.image_id == image.id).first())
+                        else None
+                    ),
                 }
-                for row in rows
+                for image, content_title, keyword_text in rows
             ]
         return self._write_json({"items": payload, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages})
     def _serve_collected_image_file(self, image_id: int) -> None:
@@ -1107,7 +1199,18 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         with session_scope() as session:
             row = session.query(ContentLabel).filter(ContentLabel.content_id == content_id).first()
             if not row:
-                return self._write_json({"tone": "", "sentiment": "", "topics": [], "quality_score": 3})
+                return self._write_json({
+                    "tone": "",
+                    "sentiment": "",
+                    "topics": [],
+                    "quality_score": 3,
+                    "structure_type": "",
+                    "title_type": "",
+                    "commercial_intent": 0,
+                    "writing_fit_score": 0,
+                    "cta_present": False,
+                    "faq_structure": False,
+                })
             topics = _safe_json_list(row.topics)
             return self._write_json(
                 {
@@ -1115,6 +1218,12 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                     "sentiment": row.sentiment or "",
                     "topics": topics,
                     "quality_score": row.quality_score,
+                    "structure_type": row.structure_type or "",
+                    "title_type": row.title_type or "",
+                    "commercial_intent": int(row.commercial_intent or 0),
+                    "writing_fit_score": int(row.writing_fit_score or 0),
+                    "cta_present": bool(row.cta_present),
+                    "faq_structure": bool(row.faq_structure),
                 }
             )
 
@@ -1122,13 +1231,19 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         with session_scope() as session:
             row = session.query(ImageLabel).filter(ImageLabel.image_id == image_id).first()
             if not row:
-                return self._write_json({"category": "", "mood": "", "quality_score": 3, "is_thumbnail_candidate": False})
+                return self._write_json({"category": "", "mood": "", "image_type": "", "subject_tags": [], "commercial_intent": 0, "keyword_relevance_score": 0, "quality_score": 3, "is_thumbnail_candidate": False, "text_overlay": False, "thumbnail_score": 0})
             return self._write_json(
                 {
                     "category": row.category or "",
                     "mood": row.mood or "",
+                    "image_type": row.image_type or "",
+                    "subject_tags": _safe_json_list(row.subject_tags),
+                    "commercial_intent": int(row.commercial_intent or 0),
+                    "keyword_relevance_score": int(row.keyword_relevance_score or 0),
                     "quality_score": row.quality_score,
                     "is_thumbnail_candidate": bool(row.is_thumbnail_candidate),
+                    "text_overlay": bool(row.text_overlay),
+                    "thumbnail_score": int(row.thumbnail_score or 0),
                 }
             )
 
@@ -1220,16 +1335,90 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         KeywordRepository.toggle(keyword_id)
         return self._write_json({"ok": True})
 
-    def _block_related_keyword(self) -> None:
+    def _toggle_related_keyword(self) -> None:
+        data = self._read_json_body()
+        if data is None:
+            return self._write_json({"error": "Invalid JSON body"}, 400)
+        related_keyword_id = _to_int(data.get("related_keyword_id"))
+        if not related_keyword_id:
+            return self._write_json({"error": "related_keyword_id is required"}, 400)
+        KeywordRepository.toggle(related_keyword_id)
+        return self._write_json({"ok": True})
+
+    def _sync_related_keywords(self) -> None:
         data = self._read_json_body()
         if data is None:
             return self._write_json({"error": "Invalid JSON body"}, 400)
         source_keyword_id = _to_int(data.get("source_keyword_id"))
-        related_keyword_id = _to_int(data.get("related_keyword_id"))
-        if not source_keyword_id or not related_keyword_id:
-            return self._write_json({"error": "source_keyword_id and related_keyword_id are required"}, 400)
-        KeywordRepository.block_and_remove_related(source_keyword_id, related_keyword_id)
-        return self._write_json({"ok": True})
+        if not source_keyword_id:
+            return self._write_json({"error": "source_keyword_id is required"}, 400)
+
+        target = None
+        for row in KeywordRepository.list_all():
+            if int(row.id) == int(source_keyword_id):
+                target = row
+                break
+        if not target:
+            return self._write_json({"error": "keyword not found"}, 404)
+
+        source_codes = keyword_engine_service.get_enabled_source_codes()
+        if not source_codes:
+            return self._write_json({"error": "활성 키워드 소스가 없습니다."}, 400)
+
+        result = keyword_engine_service.sync_related_keywords(
+            source_keyword_id=target.id,
+            source_keyword=target.keyword,
+            category_id=target.category_id,
+            enabled_sources=source_codes,
+        )
+        return self._write_json({
+            "ok": True,
+            "source_keyword_id": target.id,
+            "source_keyword": target.keyword,
+            "applied": result.total_applied,
+            "by_source": result.by_source,
+        })
+
+    def _analyze_keyword_seo_profile(self, keyword_id: int) -> None:
+        keyword = KeywordRepository.get_by_id(keyword_id)
+        if not keyword:
+            return self._write_json({"error": "keyword not found"}, 404)
+        data = self._read_json_body() or {}
+        sample_limit = max(3, min(30, _to_int(data.get("sample_limit")) or 12))
+        try:
+            result = keyword_seo_profile_service.analyze_keyword(keyword_id=keyword_id, sample_limit=sample_limit)
+        except ValueError as exc:
+            return self._write_json({"error": str(exc)}, 400)
+        profile = KeywordSeoProfileRepository.get_by_keyword_id(keyword_id)
+        payload = None
+        if profile:
+            payload = {
+                "sample_count": profile.sample_count,
+                "avg_title_length": profile.avg_title_length,
+                "avg_body_length": profile.avg_body_length,
+                "avg_heading_count": profile.avg_heading_count,
+                "avg_image_count": profile.avg_image_count,
+                "avg_list_count": profile.avg_list_count,
+                "dominant_format": profile.dominant_format,
+                "common_sections": profile.common_sections,
+                "common_terms": profile.common_terms,
+                "recommended_length_min": profile.recommended_length_min,
+                "recommended_length_max": profile.recommended_length_max,
+                "recommended_heading_count": profile.recommended_heading_count,
+                "recommended_image_count": profile.recommended_image_count,
+                "summary_text": profile.summary_text,
+                "analysis_basis": profile.analysis_basis,
+                "analyzed_at": _dt_to_iso(profile.analyzed_at),
+            }
+        return self._write_json(
+            {
+                "ok": True,
+                "keyword_id": keyword_id,
+                "keyword": keyword.keyword,
+                "sample_count": result.sample_count,
+                "profile": payload,
+            }
+        )
 
     def _save_content_label(self) -> None:
         data = self._read_json_body()
@@ -1249,6 +1438,12 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             sentiment=(str(data.get("sentiment") or "").strip() or None),
             topics=[str(item).strip() for item in topics if str(item).strip()],
             quality_score=max(1, min(5, _to_int(data.get("quality_score")) or 3)),
+            structure_type=(str(data.get("structure_type") or "").strip() or None),
+            title_type=(str(data.get("title_type") or "").strip() or None),
+            commercial_intent=max(0, min(5, _to_int(data.get("commercial_intent")) or 0)),
+            writing_fit_score=max(0, min(5, _to_int(data.get("writing_fit_score")) or 0)),
+            cta_present=bool(data.get("cta_present")),
+            faq_structure=bool(data.get("faq_structure")),
             label_method="manual",
         )
         LabelRepository.mark_content_labeled(content_id=content_id, confidence=1.0, stage_status="completed", completed=True)
@@ -1265,8 +1460,14 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             image_id=image_id,
             category=(str(data.get("category") or "").strip() or None),
             mood=(str(data.get("mood") or "").strip() or None),
+            image_type=(str(data.get("image_type") or "").strip() or None),
+            subject_tags=_safe_json_list(data.get("subject_tags")),
+            commercial_intent=max(0, min(5, _to_int(data.get("commercial_intent")) or 0)),
+            keyword_relevance_score=max(0, min(100, _to_int(data.get("keyword_relevance_score")) or 0)),
             quality_score=max(1, min(5, _to_int(data.get("quality_score")) or 3)),
             is_thumbnail_candidate=bool(data.get("is_thumbnail_candidate")),
+            text_overlay=bool(data.get("text_overlay")),
+            thumbnail_score=max(0, min(100, _to_int(data.get("thumbnail_score")) or 0)),
             label_method="manual",
         )
         LabelRepository.mark_image_labeled(image_id=image_id, confidence=1.0, stage_status="completed", completed=True)
@@ -1353,11 +1554,41 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_ai_providers(self) -> None:
         rows = AIProviderRepository.list_all()
+        label_free_id = _to_int(AppSettingRepository.get_value(LabelSettingKeys.FREE_PROVIDER_ID, ""))
+        label_paid_id = _to_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_PROVIDER_ID, ""))
+        writer_default_id = _to_int(AppSettingRepository.get_value(WriterSettingKeys.DEFAULT_AI_PROVIDER_ID, ""))
+        channel_policies = _sanitize_writer_channel_policies(
+            _safe_json_object(AppSettingRepository.get_value(WriterSettingKeys.CHANNEL_POLICIES, "{}"))
+        )
+        channel_usage_count: dict[int, int] = {}
+        for value in channel_policies.values():
+            provider_id = _to_int(value.get("default_ai_provider_id"))
+            if not provider_id:
+                continue
+            channel_usage_count[provider_id] = channel_usage_count.get(provider_id, 0) + 1
         return self._write_json([
-            {"id": row.id, "provider": row.provider, "model_name": row.model_name, "api_key_alias": row.api_key_alias,
-             "is_paid": row.is_paid, "is_enabled": row.is_enabled, "priority": row.priority,
-             "rate_limit_per_min": row.rate_limit_per_min, "daily_budget_limit": row.daily_budget_limit,
-             "status": row.status, "last_checked_at": _dt_to_iso(row.last_checked_at)} for row in rows
+            {
+                "id": row.id,
+                "provider": row.provider,
+                "model_name": row.model_name,
+                "api_key_alias": row.api_key_alias,
+                "is_paid": row.is_paid,
+                "is_enabled": row.is_enabled,
+                "priority": row.priority,
+                "rate_limit_per_min": row.rate_limit_per_min,
+                "daily_budget_limit": row.daily_budget_limit,
+                "status": row.status,
+                "last_checked_at": _dt_to_iso(row.last_checked_at),
+                "has_env": bool(str(row.api_key_alias or "").strip() and os.getenv(str(row.api_key_alias or "").strip())),
+                "usage_targets": [
+                    *(["label.free"] if label_free_id == row.id else []),
+                    *(["label.paid"] if label_paid_id == row.id else []),
+                    *(["writer.default"] if writer_default_id == row.id else []),
+                    *(["writer.channels"] if channel_usage_count.get(int(row.id), 0) > 0 else []),
+                ],
+                "writer_channel_usage_count": int(channel_usage_count.get(int(row.id), 0)),
+            }
+            for row in rows
         ])
 
     def _serve_ai_provider_env_status(self) -> None:
@@ -1426,13 +1657,14 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             _safe_json_object(AppSettingRepository.get_value(WriterSettingKeys.CHANNEL_POLICIES, "{}"))
         )
         providers = {int(p.id): p for p in AIProviderRepository.list_all()}
+        default_ai_provider_id = _to_int(AppSettingRepository.get_value(WriterSettingKeys.DEFAULT_AI_PROVIDER_ID, ""))
 
         items: list[dict] = []
         for ch in channels:
             policy = policies.get(str(ch.id), {})
             persona_ids = [n for n in (_to_int(v) for v in (policy.get("persona_ids") or [])) if n]
             template_ids = [n for n in (_to_int(v) for v in (policy.get("template_ids") or [])) if n]
-            ai_provider_id = _to_int(policy.get("default_ai_provider_id"))
+            ai_provider_id = _to_int(policy.get("default_ai_provider_id")) or default_ai_provider_id
             provider_name = ""
             if ai_provider_id and ai_provider_id in providers:
                 p = providers[ai_provider_id]
@@ -1479,6 +1711,7 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             aid = int(article.id)
             latest_job = latest_job_by_article.get(aid)
             latest_done = latest_done_by_article.get(aid)
+            review = writer_service.review_article(article)
             publish_status = "미발행"
             publish_channel = "-"
             if latest_job:
@@ -1499,6 +1732,7 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
                 "publish_channel": publish_channel,
                 "created_at": _dt_to_iso(article.created_at),
                 "last_published_at": _dt_to_iso(latest_done.processed_at if latest_done else None),
+                "seo_review": review,
             })
 
         channels = PublishChannelRepository.list_enabled()
@@ -1526,7 +1760,47 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         row = ArticleRepository.get_by_id(article_id)
         if not row:
             return self._write_json({"error": "not found"}, 404)
-        return self._write_json({"id": row.id, "title": row.title, "content": row.content, "status": row.status})
+        try:
+            generation_meta = json.loads(str(row.generation_meta_json or "{}"))
+        except Exception:
+            generation_meta = {}
+        image_ids = []
+        image_id_source = []
+        if isinstance(generation_meta, dict):
+            image_id_source = generation_meta.get("selected_image_ids") or generation_meta.get("image_ids") or []
+        for raw in image_id_source:
+            try:
+                image_ids.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        image_assets = [
+            {
+                "id": item.id,
+                "content_id": item.content_id,
+                "local_url": item.local_url or "",
+                "local_path": item.local_path or "",
+                "image_url": item.image_url,
+                "image_type": item.image_type or "",
+                "subject_tags": list(item.subject_tags or []),
+                "commercial_intent": int(item.commercial_intent or 0),
+                "keyword_relevance_score": int(item.keyword_relevance_score or 0),
+                "thumbnail_score": int(item.thumbnail_score or 0),
+                "text_overlay": bool(item.text_overlay),
+                "is_thumbnail_candidate": bool(item.is_thumbnail_candidate),
+            }
+            for item in CrawlRepository.get_images_by_ids(image_ids)
+        ]
+        return self._write_json({
+            "id": row.id,
+            "title": row.title,
+            "content": row.content,
+            "status": row.status,
+            "writing_channel_id": row.writing_channel_id,
+            "ai_provider_id": row.ai_provider_id,
+            "generation_meta": generation_meta,
+            "image_assets": image_assets,
+            "seo_review": writer_service.review_article(row),
+        })
 
     def _serve_publish_channels(self) -> None:
         publish_auto_runner.sync_channels()
@@ -1588,19 +1862,41 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             n for n in (_to_int(v) for v in _safe_json_list(AppSettingRepository.get_value(CollectSettingKeys.SELECTED_CATEGORY_IDS, "[]")))
             if n is not None
         ]
+        keyword_source_codes = keyword_engine_service.get_enabled_source_codes()
         return self._write_json({
             "keyword_scope": AppSettingRepository.get_value(CollectSettingKeys.KEYWORD_SCOPE, "selected"),
             "interval_minutes": _to_int(AppSettingRepository.get_value(CollectSettingKeys.INTERVAL_MINUTES, "60")) or 60,
             "max_results": _to_int(AppSettingRepository.get_value(CollectSettingKeys.MAX_RESULTS, "3")) or 3,
             "request_timeout": _to_int(AppSettingRepository.get_value(CollectSettingKeys.REQUEST_TIMEOUT, "15")) or 15,
             "retry_count": _to_int(AppSettingRepository.get_value(CollectSettingKeys.RETRY_COUNT, "1")) or 1,
+            "browser_fetch_mode": AppSettingRepository.get_value(CollectSettingKeys.BROWSER_FETCH_MODE, "selenium"),
+            "browser_headless": _to_bool(AppSettingRepository.get_value(CollectSettingKeys.BROWSER_HEADLESS, "0")),
             "selected_channel_codes": selected_channels,
             "selected_category_ids": selected_category_ids,
-            "naver_related_sync": _to_bool(AppSettingRepository.get_value(CollectSettingKeys.NAVER_RELATED_SYNC, "1")),
+            "keyword_source_codes": keyword_source_codes,
+            "auto_related_sync": _to_bool(AppSettingRepository.get_value(CollectSettingKeys.AUTO_RELATED_SYNC, "0")),
+            "available_keyword_sources": [
+                {"code": row.code, "label": row.label, "enabled_by_default": row.enabled_by_default}
+                for row in keyword_engine_service.list_sources()
+            ],
         })
 
     def _serve_v2_label_settings(self) -> None:
         snapshot = LabelRepository.get_label_automation_snapshot()
+        provider_rows = AIProviderRepository.list_all(enabled_only=True)
+        provider_summary = {"free": [], "paid": []}
+        for row in provider_rows:
+            alias = str(row.api_key_alias or "").strip()
+            has_env = bool(alias and os.getenv(alias))
+            item = {
+                "id": int(row.id),
+                "provider": str(row.provider or ""),
+                "model_name": str(row.model_name or ""),
+                "api_key_alias": alias,
+                "has_env": has_env,
+                "ready": has_env,
+            }
+            provider_summary["paid" if row.is_paid else "free"].append(item)
         return self._write_json({
             "method": AppSettingRepository.get_value(LabelSettingKeys.METHOD, "rule"),
             "batch_size": _to_int(AppSettingRepository.get_value(LabelSettingKeys.BATCH_SIZE, "300")) or 300,
@@ -1612,18 +1908,23 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             "paid_api_daily_limit": _to_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_API_DAILY_LIMIT, "20")) or 20,
             "threshold_mid": _to_int(AppSettingRepository.get_value(LabelSettingKeys.THRESHOLD_MID, "3")) or 3,
             "threshold_high": _to_int(AppSettingRepository.get_value(LabelSettingKeys.THRESHOLD_HIGH, "4")) or 4,
+            "free_provider_id": _to_int(AppSettingRepository.get_value(LabelSettingKeys.FREE_PROVIDER_ID, "")),
+            "paid_provider_id": _to_int(AppSettingRepository.get_value(LabelSettingKeys.PAID_PROVIDER_ID, "")),
             "auto_status": labeling_auto_scheduler.status(),
             "free_api_used_today": int(snapshot.get("free_api_used_today", 0)),
             "paid_api_used_today": int(snapshot.get("paid_api_used_today", 0)),
             "free_api_remaining_today": int(snapshot.get("free_api_remaining_today", 0)),
             "paid_api_remaining_today": int(snapshot.get("paid_api_remaining_today", 0)),
+            "available_ai_providers": provider_summary,
         })
 
     def _serve_v2_writer_settings(self) -> None:
         raw_channel_policies = _safe_json_object(AppSettingRepository.get_value(WriterSettingKeys.CHANNEL_POLICIES, "{}"))
         channel_policies = _sanitize_writer_channel_policies(raw_channel_policies)
         return self._write_json({
+            "default_ai_provider_id": _to_int(AppSettingRepository.get_value(WriterSettingKeys.DEFAULT_AI_PROVIDER_ID, "")),
             "ai_provider_priority": AppSettingRepository.get_value(WriterSettingKeys.AI_PROVIDER_PRIORITY, "cost_first"),
+            "min_seo_review_score": _to_int(AppSettingRepository.get_value(WriterSettingKeys.MIN_SEO_REVIEW_SCORE, "60")) or 60,
             "channel_policies": channel_policies,
         })
 
@@ -2151,6 +2452,9 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         setting = PublishChannelSettingRepository.get_by_channel(target_channel)
         if not setting or str(setting.publish_mode) != "auto":
             return self._write_json({"error": "선택 채널은 자동 발행 허용 채널이 아닙니다."}, 400)
+        gate_error = self._writer_seo_gate_error(article_id)
+        if gate_error:
+            return self._write_json({"error": gate_error}, 400)
 
         try:
             job_id = publisher_service.enqueue_publish(article_id=article_id, target_channel=target_channel, mode="auto")
@@ -2170,13 +2474,32 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         if not isinstance(ids_raw, list):
             return self._write_json({"error": "article_ids(list) is required"}, 400)
         updated = 0
+        blocked: list[dict] = []
         for raw in ids_raw:
             article_id = _to_int(raw)
             if not article_id:
                 continue
+            if status in {"ready", "published"}:
+                gate_error = self._writer_seo_gate_error(article_id)
+                if gate_error:
+                    blocked.append({"article_id": article_id, "reason": gate_error})
+                    continue
             ArticleRepository.update_status(article_id=article_id, status=status)
             updated += 1
-        return self._write_json({"ok": True, "updated": updated})
+        return self._write_json({"ok": True, "updated": updated, "blocked": blocked})
+
+    def _writer_seo_gate_error(self, article_id: int) -> str | None:
+        minimum = _to_int(AppSettingRepository.get_value(WriterSettingKeys.MIN_SEO_REVIEW_SCORE, "60")) or 60
+        if minimum <= 0:
+            return None
+        article = ArticleRepository.get_by_id(article_id)
+        review = writer_service.review_article(article)
+        score = int(review.get("score") or 0)
+        if score >= minimum:
+            return None
+        recommendations = review.get("recommendations") or []
+        guide = f" 보완 가이드: {recommendations[0]}" if isinstance(recommendations, list) and recommendations else ""
+        return f"SEO 검수 점수 {score}점으로 기준 {minimum}점 미만입니다. ({review.get('status') or '보완필요'}){guide}"
 
     def _health_check_ai_provider(self, provider_id: int) -> None:
         row = AIProviderRepository.get_by_id(provider_id)
@@ -2197,6 +2520,17 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             return self._write_json({"error": "Invalid JSON body"}, 400)
         ArticleRepository.update_content(article_id=article_id, title=str(data.get("title") or "")[:500], content=str(data.get("content") or ""))
         return self._write_json({"ok": True})
+
+    def _writer_regenerate_article(self, article_id: int) -> None:
+        data = self._read_json_body()
+        if data is None:
+            data = {}
+        ai_provider_id = _to_int(data.get("ai_provider_id"))
+        try:
+            result = writer_service.regenerate_article(article_id=article_id, ai_provider_id=ai_provider_id)
+        except Exception as exc:
+            return self._write_json({"error": str(exc)}, 400)
+        return self._write_json({"ok": True, **result})
 
     def _create_publish_channel(self) -> None:
         data = self._read_json_body()
@@ -2335,15 +2669,28 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
             if n is not None:
                 category_ids.append(n)
         category_ids = sorted(set(category_ids))
+        available_codes = set(keyword_engine_service.list_provider_codes())
+        source_codes: list[str] = []
+        for raw_code in (data.get("keyword_source_codes") or []):
+            code = str(raw_code or "").strip()
+            if code and code in available_codes:
+                source_codes.append(code)
+        source_codes = sorted(set(source_codes))
+        browser_fetch_mode = str(data.get("browser_fetch_mode") or "selenium").strip().lower()
+        if browser_fetch_mode not in {"requests", "selenium"}:
+            browser_fetch_mode = "selenium"
 
         AppSettingRepository.set_value(CollectSettingKeys.KEYWORD_SCOPE, scope)
         AppSettingRepository.set_value(CollectSettingKeys.INTERVAL_MINUTES, str(max(5, min(1440, _to_int(data.get("interval_minutes")) or 60))))
         AppSettingRepository.set_value(CollectSettingKeys.MAX_RESULTS, str(max(1, min(20, _to_int(data.get("max_results")) or 3))))
         AppSettingRepository.set_value(CollectSettingKeys.REQUEST_TIMEOUT, str(max(3, min(120, _to_int(data.get("request_timeout")) or 15))))
         AppSettingRepository.set_value(CollectSettingKeys.RETRY_COUNT, str(max(0, min(5, _to_int(data.get("retry_count")) or 1))))
+        AppSettingRepository.set_value(CollectSettingKeys.BROWSER_FETCH_MODE, browser_fetch_mode)
+        AppSettingRepository.set_value(CollectSettingKeys.BROWSER_HEADLESS, "1" if _to_bool(data.get("browser_headless")) else "0")
         AppSettingRepository.set_value(CollectSettingKeys.SELECTED_CHANNEL_CODES, json.dumps(channel_codes, ensure_ascii=False))
         AppSettingRepository.set_value(CollectSettingKeys.SELECTED_CATEGORY_IDS, json.dumps(category_ids, ensure_ascii=False))
-        AppSettingRepository.set_value(CollectSettingKeys.NAVER_RELATED_SYNC, "1" if _to_bool(data.get("naver_related_sync")) else "0")
+        AppSettingRepository.set_value(CollectSettingKeys.KEYWORD_SOURCE_CODES, ",".join(source_codes))
+        AppSettingRepository.set_value(CollectSettingKeys.AUTO_RELATED_SYNC, "1" if _to_bool(data.get("auto_related_sync")) else "0")
         return self._write_json({"ok": True})
 
     def _save_v2_label_settings(self) -> None:
@@ -2362,6 +2709,10 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         threshold_high = max(threshold_mid, min(5, _to_int(data.get("threshold_high")) or 4))
         AppSettingRepository.set_value(LabelSettingKeys.THRESHOLD_MID, str(threshold_mid))
         AppSettingRepository.set_value(LabelSettingKeys.THRESHOLD_HIGH, str(threshold_high))
+        free_provider_id = _to_int(data.get("free_provider_id"))
+        paid_provider_id = _to_int(data.get("paid_provider_id"))
+        AppSettingRepository.set_value(LabelSettingKeys.FREE_PROVIDER_ID, str(free_provider_id or ""))
+        AppSettingRepository.set_value(LabelSettingKeys.PAID_PROVIDER_ID, str(paid_provider_id or ""))
         return self._write_json({"ok": True})
 
     def _save_v2_writer_settings(self) -> None:
@@ -2371,7 +2722,11 @@ class _WebShellRequestHandler(SimpleHTTPRequestHandler):
         raw_channel_policies = data.get("channel_policies")
         channel_policies = _sanitize_writer_channel_policies(raw_channel_policies if isinstance(raw_channel_policies, dict) else {})
         AppSettingRepository.set_value(WriterSettingKeys.CHANNEL_POLICIES, json.dumps(channel_policies, ensure_ascii=False))
+        default_ai_provider_id = _to_int(data.get("default_ai_provider_id"))
+        AppSettingRepository.set_value(WriterSettingKeys.DEFAULT_AI_PROVIDER_ID, str(default_ai_provider_id or ""))
         AppSettingRepository.set_value(WriterSettingKeys.AI_PROVIDER_PRIORITY, str(data.get("ai_provider_priority") or "cost_first"))
+        min_seo_review_score = max(0, min(100, _to_int(data.get("min_seo_review_score")) or 60))
+        AppSettingRepository.set_value(WriterSettingKeys.MIN_SEO_REVIEW_SCORE, str(min_seo_review_score))
         return self._write_json({"ok": True})
 
     def _save_v2_publish_settings(self) -> None:
@@ -2504,6 +2859,21 @@ def _dt_to_iso(value: datetime | None) -> str | None:
     if not isinstance(value, datetime):
         return None
     return value.isoformat(sep=" ", timespec="seconds")
+
+
+def _expand_with_active_related(base_ids: list[int], all_active_keywords: dict[int, object]) -> list[int]:
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for base_id in base_ids:
+        if base_id in all_active_keywords and base_id not in seen:
+            seen.add(base_id)
+            ordered.append(base_id)
+        for rel in KeywordRepository.list_related_keywords(base_id):
+            rid = int(rel.related_keyword_id)
+            if rid in all_active_keywords and rid not in seen:
+                seen.add(rid)
+                ordered.append(rid)
+    return ordered
 
 
 _WEB_SHELL_SERVER: _WebShellServer | None = None

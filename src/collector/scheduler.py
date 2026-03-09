@@ -7,6 +7,7 @@ from threading import Event, Lock, Thread
 
 from collector.service import crawl_service
 from core.settings_keys import CollectSettingKeys
+from keyword_engine.service import keyword_engine_service
 from storage.repositories import AppSettingRepository, KeywordRepository
 
 
@@ -97,7 +98,9 @@ class CollectScheduler:
             scope = "selected"
 
         max_results = _clamp_int(AppSettingRepository.get_value(CollectSettingKeys.MAX_RESULTS, "3"), 3, 1, 20)
-        sync_related = _to_bool(AppSettingRepository.get_value(CollectSettingKeys.NAVER_RELATED_SYNC, "1"))
+        related_source_codes = keyword_engine_service.get_enabled_source_codes()
+        auto_related_sync = _to_bool(AppSettingRepository.get_value(CollectSettingKeys.AUTO_RELATED_SYNC, "0"))
+        sync_related = auto_related_sync and bool(related_source_codes)
 
         selected_channel_codes = _safe_json_list(AppSettingRepository.get_value(CollectSettingKeys.SELECTED_CHANNEL_CODES, "[]"))
         selected_category_ids = {
@@ -105,33 +108,22 @@ class CollectScheduler:
             if n is not None
         }
 
-        all_keywords = [k for k in KeywordRepository.list_all() if k.is_active and not k.is_auto_generated]
         all_active_keywords = {k.id: k for k in KeywordRepository.list_all() if k.is_active}
+        root_keywords = [k for k in all_active_keywords.values() if not k.is_auto_generated]
 
         target_ids: list[int] = []
         if scope == "all":
-            target_ids = [k.id for k in all_keywords]
+            target_ids = self._expand_with_active_related([k.id for k in root_keywords], all_active_keywords)
         elif scope == "related":
-            base_ids = [k.id for k in all_keywords if (k.category_id or 0) in selected_category_ids]
+            base_ids = [k.id for k in root_keywords if (k.category_id or 0) in selected_category_ids]
             if not base_ids:
                 return ["자동수집 생략: 키워드 확장 모드에 체크된 카테고리가 없습니다."]
-
-            ordered: list[int] = []
-            seen: set[int] = set()
-            for base_id in base_ids:
-                if base_id in all_active_keywords and base_id not in seen:
-                    seen.add(base_id)
-                    ordered.append(base_id)
-                for rel in KeywordRepository.list_related_keywords(base_id):
-                    rid = int(rel.related_keyword_id)
-                    if rid in all_active_keywords and rid not in seen:
-                        seen.add(rid)
-                        ordered.append(rid)
-            target_ids = ordered
+            target_ids = self._expand_with_active_related(base_ids, all_active_keywords)
         else:
             if not selected_category_ids:
                 return ["자동수집 생략: 체크된 내역 모드에 체크된 카테고리가 없습니다."]
-            target_ids = [k.id for k in all_keywords if (k.category_id or 0) in selected_category_ids]
+            base_ids = [k.id for k in root_keywords if (k.category_id or 0) in selected_category_ids]
+            target_ids = self._expand_with_active_related(base_ids, all_active_keywords)
 
         if not target_ids:
             return ["자동수집 생략: 실행 대상 키워드가 없습니다."]
@@ -145,10 +137,26 @@ class CollectScheduler:
                     keyword_id=keyword_id,
                     max_results=max_results,
                     sync_related=sync_related,
+                    related_source_codes=related_source_codes,
                     allowed_channels=(selected_channel_codes or None) if scope != "all" else None,
                 )
             )
         return messages
+
+    @staticmethod
+    def _expand_with_active_related(base_ids: list[int], all_active_keywords: dict[int, object]) -> list[int]:
+        ordered: list[int] = []
+        seen: set[int] = set()
+        for base_id in base_ids:
+            if base_id in all_active_keywords and base_id not in seen:
+                seen.add(base_id)
+                ordered.append(base_id)
+            for rel in KeywordRepository.list_related_keywords(base_id):
+                rid = int(rel.related_keyword_id)
+                if rid in all_active_keywords and rid not in seen:
+                    seen.add(rid)
+                    ordered.append(rid)
+        return ordered
 
     @staticmethod
     def _read_interval_minutes() -> int:

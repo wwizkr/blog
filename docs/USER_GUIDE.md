@@ -1,10 +1,10 @@
-# BlogWriter 사용설명서 (UI 기준)
+# MubloOps 사용설명서 (UI 기준)
 
 작성일: 2026-03-01  
 버전: 평탄화 구조 기준
 
 ## 1. 목적
-이 문서는 현재 구현된 BlogWriter UI의 메뉴 구성과 사용 순서를 빠르게 이해하기 위한 운영 가이드입니다.
+이 문서는 현재 구현된 MubloOps UI의 메뉴 구성과 사용 순서를 빠르게 이해하기 위한 운영 가이드입니다.
 
 ## 2. 실행
 1. 의존성 설치
@@ -56,8 +56,8 @@
 - 재시도 큐
 
 ## 4. 데이터/저장 위치
-- DB: `blogwriter_data/blogwriter.db`
-- 웹에디터 런타임/업로드: `blogwriter_data/web_editor_runtime`
+- 기본 DB: `mublo_ops_data/mublo_ops.db`
+- 기본 웹에디터 런타임/업로드: `mublo_ops_data/web_editor_runtime`
 
 ## 5. 권장 운영 순서
 1. 키워드 관리에서 카테고리/키워드 정리

@@ -46,12 +46,40 @@ class KeywordRelatedRelation(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class KeywordRelatedBlock(Base):
-    __tablename__ = "keyword_related_blocks"
+class KeywordSeoProfile(Base):
+    __tablename__ = "keyword_seo_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    source_keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id", ondelete="CASCADE"), nullable=False)
-    related_keyword: Mapped[str] = mapped_column(String(200), nullable=False)
+    keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id", ondelete="CASCADE"), unique=True, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_title_length: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_body_length: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_heading_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_list_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    dominant_format: Mapped[str | None] = mapped_column(String(30))
+    common_sections_json: Mapped[str | None] = mapped_column(Text)
+    common_terms_json: Mapped[str | None] = mapped_column(Text)
+    recommended_length_min: Mapped[int | None] = mapped_column(Integer)
+    recommended_length_max: Mapped[int | None] = mapped_column(Integer)
+    recommended_heading_count: Mapped[int | None] = mapped_column(Integer)
+    recommended_image_count: Mapped[int | None] = mapped_column(Integer)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    analysis_basis_json: Mapped[str | None] = mapped_column(Text)
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class KeywordSeoProfileRun(Base):
+    __tablename__ = "keyword_seo_profile_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id", ondelete="CASCADE"), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    metrics_json: Mapped[str | None] = mapped_column(Text)
+    source_content_ids_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 class SourceChannel(Base):
@@ -89,6 +117,7 @@ class RawContent(Base):
     channel_code: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    body_html: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
     author: Mapped[str | None] = mapped_column(String(200))
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -129,6 +158,12 @@ class ContentLabel(Base):
     tone: Mapped[str | None] = mapped_column(String(30))
     sentiment: Mapped[str | None] = mapped_column(String(30))
     topics: Mapped[str | None] = mapped_column(Text)  # JSON string
+    structure_type: Mapped[str | None] = mapped_column(String(30))
+    title_type: Mapped[str | None] = mapped_column(String(30))
+    commercial_intent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    writing_fit_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cta_present: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    faq_structure: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     quality_score: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     label_method: Mapped[str] = mapped_column(String(20), default="rule", nullable=False)
     labeled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -143,6 +178,12 @@ class ImageLabel(Base):
     image_id: Mapped[int] = mapped_column(ForeignKey("raw_images.id", ondelete="CASCADE"), unique=True, nullable=False)
     category: Mapped[str | None] = mapped_column(String(30))
     mood: Mapped[str | None] = mapped_column(String(30))
+    image_type: Mapped[str | None] = mapped_column(String(30))
+    subject_tags: Mapped[str | None] = mapped_column(Text)  # JSON string
+    commercial_intent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    keyword_relevance_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    text_overlay: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    thumbnail_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     quality_score: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     is_thumbnail_candidate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     label_method: Mapped[str] = mapped_column(String(20), default="rule", nullable=False)
@@ -272,13 +313,18 @@ class GeneratedArticle(Base):
     template_id: Mapped[int | None] = mapped_column(ForeignKey("article_templates.id", ondelete="SET NULL"))
     template_name: Mapped[str | None] = mapped_column(String(120))
     template_version: Mapped[int | None] = mapped_column(Integer)
+    writing_channel_id: Mapped[int | None] = mapped_column(ForeignKey("writing_channels.id", ondelete="SET NULL"))
+    ai_provider_id: Mapped[int | None] = mapped_column(ForeignKey("ai_providers.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     source_content_ids: Mapped[str | None] = mapped_column(Text)  # JSON string
+    generation_meta_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     persona: Mapped[Persona | None] = relationship()
     template: Mapped[ArticleTemplate | None] = relationship()
+    writing_channel: Mapped[WritingChannel | None] = relationship()
+    ai_provider: Mapped[AIProvider | None] = relationship()
 
 
 class PublishJob(Base):
